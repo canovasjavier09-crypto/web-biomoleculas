@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Biomoléculas 3D</title>
+  <meta name="description" content="Explora en 3D la estructura de las biomoléculas de Biología de 2.º de Bachillerato: monómeros, enlaces y estructura espacial.">
+  <link rel="stylesheet" href="css/estilos.css">
+</head>
+<body>
+  <header class="cabecera">
+    <button class="btn-icono solo-movil" id="btnMenu" aria-label="Abrir el menú de moléculas">☰</button>
+    <div class="marca">
+      <h1>Biomoléculas 3D</h1>
+      <span class="sub">Biología 2.º Bachillerato · PAU Aragón</span>
+    </div>
+    <form class="pdb-libre" id="formPDB" title="Cargar cualquier estructura de RCSB PDB por su código">
+      <label for="inputPDB" class="oculto-visual">Código PDB</label>
+      <input id="inputPDB" maxlength="4" placeholder="ID PDB" autocomplete="off" spellcheck="false">
+      <button type="submit" class="btn">Abrir</button>
+    </form>
+    <button class="btn-icono" id="btnTema" aria-label="Cambiar entre modo claro y oscuro" title="Modo claro / oscuro">◐</button>
+  </header>
+
+  <div class="app">
+    <!-- ======== MENÚ LATERAL ======== -->
+    <nav class="menu" id="menu" aria-label="Bloques y moléculas"></nav>
+    <div class="velo" id="velo"></div>
+
+    <!-- ======== ZONA CENTRAL: VISOR ======== -->
+    <main class="centro">
+      <div class="titulo-mol">
+        <h2 id="tituloMol">…</h2>
+        <div class="variantes" id="variantes"></div>
+      </div>
+
+      <div class="barra" id="barra">
+        <div class="grupo-barra" role="group" aria-label="Representación">
+          <span class="etq">Ver como</span>
+          <button class="chip" data-rep="bolas">Bolas y varillas</button>
+          <button class="chip" data-rep="varillas">Varillas</button>
+          <button class="chip" data-rep="esferas">Esferas</button>
+          <button class="chip" data-rep="cartoon">Cinta</button>
+          <button class="chip destacado" data-rep="2d" title="Fórmula en 2D: símbolos de los elementos y rayas para los enlaces">2D</button>
+        </div>
+        <div class="grupo-barra" role="group" aria-label="Color">
+          <span class="etq">Color</span>
+          <button class="chip" data-color="elemento">Elemento</button>
+          <button class="chip" data-color="monomero">Monómeros</button>
+          <button class="chip" data-color="cadena" data-solo-macro>Cadenas</button>
+          <button class="chip" data-color="ss" data-solo-macro>Estr. secundaria</button>
+        </div>
+        <div class="grupo-barra" role="group" aria-label="Etiquetas y modos">
+          <button class="chip" id="btnEtqAtomos">Etiquetas de átomos</button>
+          <button class="chip" id="btnEtqRes">Etiquetas de monómeros</button>
+          <select id="selVista" class="selector" aria-label="Vista"></select>
+          <button class="chip" id="btnGuia" hidden title="Línea que une los centros de las glucosas: muestra si la cadena es helicoidal o lineal">〰 Forma de la cadena</button>
+          <button class="chip destacado" id="btnDescomponer">⇄ Descomponer</button>
+          <button class="chip" id="btnCentrar" title="Centrar la molécula">⌖ Centrar</button>
+        </div>
+      </div>
+
+      <div class="resaltar" id="resaltar" aria-label="Resaltar grupos y enlaces"></div>
+
+      <div class="barra-cicl" id="barraCicl" hidden>
+        <button class="btn primario" id="btnCiclar">▶ Ciclar</button>
+        <button class="btn" id="btnAbrirCadena">⟲ Cadena abierta</button>
+        <input type="range" id="rangoCicl" min="0" max="50" value="0" aria-label="Progreso de la ciclación">
+        <div class="paso" id="pasoCicl"></div>
+      </div>
+
+      <div class="visor-caja">
+        <div id="visor" class="visor" aria-label="Visor 3D: arrastra para girar, rueda o pellizco para zoom"></div>
+        <div id="esquema" class="esquema" hidden></div>
+        <div id="vista2d" class="vista2d" hidden>
+          <div class="v2d-modos" id="modos2d"></div>
+          <div id="cont2d" style="flex:1;min-height:0;display:flex;flex-direction:column;position:relative"></div>
+        </div>
+        <div class="leyenda" id="leyenda"></div>
+        <div class="aviso" id="aviso" hidden></div>
+        <div class="cargando" id="cargando" hidden>Cargando estructura…</div>
+        <div class="ayuda-visor">Arrastra: girar · Rueda/pellizco: zoom · Mayús+arrastrar o dos dedos: mover · Pulsa un átomo o un resaltado</div>
+      </div>
+      <div class="secuencia" id="secuencia" hidden></div>
+    </main>
+
+    <!-- ======== PANEL DERECHO ======== -->
+    <aside class="panel">
+      <div class="pestanas" role="tablist">
+        <button role="tab" class="pestana activa" data-tab="info">Información</button>
+        <button role="tab" class="pestana" data-tab="detalle">Detalle</button>
+        <button role="tab" class="pestana" data-tab="test">Test</button>
+      </div>
+      <section class="tab-contenido" id="tab-info"></section>
+      <section class="tab-contenido" id="tab-detalle" hidden></section>
+      <section class="tab-contenido" id="tab-test" hidden></section>
+    </aside>
+  </div>
+
+  <!-- 3Dmol.js: copia local (funciona sin internet); si falta, se usa el CDN -->
+  <script src="lib/3Dmol-min.js"></script>
+  <script>
+    if (!window.$3Dmol) document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.5.5/3Dmol-min.js"><\/script>');
+  </script>
+  <script src="js/moleculas.js"></script>
+  <script src="js/analisis.js"></script>
+  <script src="js/esquema-enzima.js"></script>
+  <script src="js/vista2d.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
