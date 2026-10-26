@@ -73,8 +73,13 @@
         <div id="visor" class="visor" aria-label="Visor 3D: arrastra para girar, rueda o pellizco para zoom"></div>
         <div id="esquema" class="esquema" hidden></div>
         <div id="vista2d" class="vista2d" hidden>
+          <div class="interruptor2d" id="interruptor2d" role="group" aria-label="Tipo de vista 2D">
+            <button data-v2="real" class="activo" title="Fórmula calculada a partir de la estructura real">Real</button>
+            <button data-v2="estudio" title="Forma simplificada de los libros y la PAU">Estudio</button>
+          </div>
           <div class="v2d-modos" id="modos2d"></div>
           <div id="cont2d" style="flex:1;min-height:0;display:flex;flex-direction:column;position:relative"></div>
+          <div id="contEstudio" class="cont-estudio" hidden></div>
         </div>
         <div class="leyenda" id="leyenda"></div>
         <div class="aviso" id="aviso" hidden></div>
@@ -106,6 +111,8 @@
   <script src="js/analisis.js"></script>
   <script src="js/esquema-enzima.js"></script>
   <script src="js/vista2d.js"></script>
+  <script src="js/estudio.js"></script>
+  <script src="js/vista-estudio.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

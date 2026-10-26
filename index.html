@@ -285,6 +285,35 @@ button, input, select { font: inherit; color: inherit; }
 .barra-cicl input[type=range] { flex: 1; min-width: 140px; accent-color: var(--acento); }
 .barra-cicl .paso { flex-basis: 100%; font-size: 14px; }
 
+/* ---------- Interruptor Real / Estudio (vista 2D) ---------- */
+.interruptor2d { display: inline-flex; border: 1px solid var(--borde); border-radius: 999px; overflow: hidden; margin: 8px 10px 0; align-self: flex-start; }
+.interruptor2d button { border: 0; background: var(--superficie); padding: 4px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--texto-suave); }
+.interruptor2d button.activo { background: var(--acento); color: #fff; }
+.interruptor2d button:disabled { opacity: .45; cursor: not-allowed; }
+.v2d-sel text { fill: #e67700 !important; font-weight: 900 !important; }
+.v2d-sel > rect:first-child { stroke: #f59f00; stroke-width: 2.5; }
+
+/* ---------- Forma de estudio: fondo blanco, trazo negro ---------- */
+.cont-estudio { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; background: #fff; color: #111; margin-top: 6px; }
+.est-barra { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 56px 4px 10px; font-size: 12.5px; color: #495057; }
+.est-barra .chip { background: #fff; color: #212529; border-color: #ced4da; }
+.est-barra .chip.activo { background: #212529; border-color: #212529; color: #fff; }
+.est-lienzo { flex: 1; min-height: 0; touch-action: none; cursor: grab; background: #fff; }
+.est-svg { width: 100%; height: 100%; display: block; user-select: none; }
+.est-zoom { top: 6px; }
+.est-zoom .btn-icono { background: #f1f3f5; color: #212529; border-color: #ced4da; }
+.est-svg text { font: 600 17px "Helvetica Neue", Arial, system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+.est-enlace line { stroke: #111; stroke-width: 2; stroke-linecap: round; }
+.est-enlace line.est-diana, .est-hb line.est-diana { stroke: transparent; stroke-width: 14; }
+.est-enlace, .est-hb, .est-atomo, .est-tag { cursor: pointer; }
+.est-enlace:hover line:not(.est-diana) { stroke: #1c4fd6; }
+.est-caja { fill: none; stroke-width: 2; stroke-dasharray: 6 3; }
+.est-tag text { font: 700 12px system-ui, sans-serif !important; }
+.est-nota { font: italic 500 14px system-ui, sans-serif !important; fill: #495057; }
+.est-aviso { padding: 16px; color: #c92a2a; font-size: 14px; }
+
+.oculto-medible { visibility: hidden; position: absolute !important; inset: 0; pointer-events: none; }
+
 </style>
 </head>
 <body>
@@ -353,8 +382,13 @@ button, input, select { font: inherit; color: inherit; }
         <div id="visor" class="visor" aria-label="Visor 3D: arrastra para girar, rueda o pellizco para zoom"></div>
         <div id="esquema" class="esquema" hidden></div>
         <div id="vista2d" class="vista2d" hidden>
+          <div class="interruptor2d" id="interruptor2d" role="group" aria-label="Tipo de vista 2D">
+            <button data-v2="real" class="activo" title="Fórmula calculada a partir de la estructura real">Real</button>
+            <button data-v2="estudio" title="Forma simplificada de los libros y la PAU">Estudio</button>
+          </div>
           <div class="v2d-modos" id="modos2d"></div>
           <div id="cont2d" style="flex:1;min-height:0;display:flex;flex-direction:column;position:relative"></div>
+          <div id="contEstudio" class="cont-estudio" hidden></div>
         </div>
         <div class="leyenda" id="leyenda"></div>
         <div class="aviso" id="aviso" hidden></div>
@@ -2575,6 +2609,824 @@ const Vista2D = (() => {
 })();
 
 </script>
+  <script>/* js/estudio.js */
+/* =====================================================================
+   estudio.js — DATOS de la «forma de estudio» (2D simplificada de los
+   libros y de la PAU). Cada dibujo se define a mano: coordenadas en
+   unidades de enlace (1 = longitud de un enlace), ángulos limpios
+   (0º, 90º, 60º/120º) y un átomo por símbolo. NO se calcula desde el 3D.
+
+   Cómo se define un dibujo (clase Dib):
+     d.a(el, x, y, {h, carga})   átomo; h = nº de H que se escriben junto a él (OH, CH₂…)
+     d.r(i, ang, el, {...})      átomo nuevo unido a i en la dirección ang (0 = →, 90 = ↓)
+     d.e(i, j, orden)            enlace (orden 2 = doble)
+     d.puente(h, aceptor)        puente de hidrógeno (línea discontinua)
+   Ayudas: anillo() (Haworth plano), fischer(), acilo() (cadena de ácido graso),
+   purina() / pirimidina() (bases).
+
+   La web comprueba cada dibujo al mostrarlo: busca la correspondencia átomo a
+   átomo con la estructura 3D y verifica la estereoquímica (lado de cada –OH en
+   Haworth, derecha/izquierda en Fischer). Si un dibujo no encaja, avisa.
+
+   ESTUDIO[clave de la estructura] = lista de dibujos posibles (se usa el
+   primero que encaja; p. ej. en la ciclación, Fischer abierto o Haworth cerrado).
+   ===================================================================== */
+const ESTUDIO = (() => {
+  const RAD = Math.PI / 180;
+  const dir = a => [Math.cos(a * RAD), Math.sin(a * RAD)];
+
+  class Dib {
+    constructor() { this.at = []; this.en = []; this.hb = []; this.anillos = []; this.fischer = []; this.textos = []; }
+    a(el, x, y, o = {}) { this.at.push({ el, x, y, h: o.h || 0, carga: o.carga || '' }); return this.at.length - 1; }
+    e(a, b, orden = 1, o = {}) { this.en.push({ a, b, o: orden, agn: !!o.agn }); return this; }
+    r(i, ang, el, o = {}) {
+      const p = this.at[i], [dx, dy] = dir(ang), L = o.len || 1;
+      const j = this.a(el, p.x + dx * L, p.y + dy * L, o);
+      this.e(i, j, o.ord || 1, o);
+      return j;
+    }
+    puente(h, acc) { this.hb.push([h, acc]); }
+    texto(x, y, t) { this.textos.push({ x, y, t }); }
+  }
+
+  /* ---------- sustituyentes ---------- */
+  // t: 'H' | 'OH' | 'O*' (O puente) | '*' (continúa: «···») | 'CH3' | 'CH2OH' | 'CH2*' | {t:'link', id}
+  function sus(d, c, ang, t, len, cx) {
+    if (t && typeof t === 'object') {
+      if (t.t === 'link') { d.e(c, t.id); return t.id; }
+      if (t.ang !== undefined) ang = t.ang;
+      if (t.len !== undefined) len = t.len;
+      t = t.t;
+    }
+    switch (t) {
+      case 'H': return d.r(c, ang, 'H', { len: len * 0.85 });
+      case 'OH': return d.r(c, ang, 'O', { len, h: 1 });
+      case 'O*': return d.r(c, ang, 'O', { len });
+      case '*': return d.r(c, ang, '*', { len });
+      case 'CH3': return d.r(c, ang, 'C', { len, h: 3 });
+      case 'CH2OH': case 'CH2*': {
+        const c6 = d.r(c, ang, 'C', { len, h: 2 });
+        if (t === 'CH2OH') d.r(c6, d.at[c].x >= cx ? 0 : 180, 'O', { h: 1, len: 0.95 });
+        return c6;
+      }
+    }
+    throw new Error('Sustituyente desconocido: ' + t);
+  }
+
+  /* ---------- anillos de Haworth (planos) ----------
+     forma 'piranosa' (O + C1…C5) o 'furanosa' (O + 4 C). Los carbonos se numeran
+     1…n desde el anomérico. conf[k] = {arriba, abajo}: lo que hay en cada cara en la
+     convención de Haworth (D-azúcares: CH₂OH terminal arriba). opt.invertida dibuja el
+     anillo dado la vuelta (como el 2.º anillo de la celobiosa) y opt.girada lo gira
+     sobre el eje vertical (como la fructosa de la sacarosa).                         */
+  const HEX = { O: [0.65, -1.126], 1: [1.3, 0], 2: [0.65, 1.126], 3: [-0.65, 1.126], 4: [-1.3, 0], 5: [-0.65, -1.126] };
+  const PEN = { O: [0, -1.05], 1: [1.0, -0.33], 2: [0.62, 0.85], 3: [-0.62, 0.85], 4: [-1.0, -0.33] };
+  function anillo(d, cx, cy, forma, conf, opt = {}) {
+    const fx = opt.girada ? -1 : 1, fy = opt.invertida ? -1 : 1;
+    const P = forma === 'piranosa' ? HEX : PEN, n = forma === 'piranosa' ? 5 : 4;
+    const id = { O: d.a('O', cx + P.O[0] * fx, cy + P.O[1] * fy) };
+    for (let k = 1; k <= n; k++) id[k] = d.a('C', cx + P[k][0] * fx, cy + P[k][1] * fy);
+    const orden = ['O']; for (let k = 1; k <= n; k++) orden.push(k);
+    orden.forEach((k, i) => d.e(id[k], id[orden[(i + 1) % orden.length]]));
+    const subs = [];
+    for (let k = 1; k <= n; k++) for (const lado of ['arriba', 'abajo']) {
+      const spec = (conf[k] || {})[lado];
+      if (spec == null) continue;
+      const haciaArriba = (lado === 'arriba') !== !!opt.invertida;
+      const yv = P[k][1] * fy;
+      const interior = (haciaArriba && yv > 0.5) || (!haciaArriba && yv < -0.5);
+      const j = sus(d, id[k], haciaArriba ? -90 : 90, spec, interior ? 0.62 : 0.95, cx);
+      subs.push({ c: id[k], x: j, arriba: lado === 'arriba' });
+      id[k + (lado === 'arriba' ? 'a' : 'b')] = j;
+    }
+    d.anillos.push({ ciclo: orden.map(k => id[k]), subs });
+    return id;
+  }
+  // configuración de Haworth a partir de la proyección de Fischer: derecha (D) → abajo
+  const cara = f => f === 'D' ? { arriba: 'H', abajo: 'OH' } : f === 'I' ? { arriba: 'OH', abajo: 'H' } : { arriba: 'H', abajo: 'H' };
+  const anomerico = (an, otro = 'H') => an === 'β' ? { arriba: 'OH', abajo: otro } : { arriba: otro, abajo: 'OH' };
+  // aldohexopiranosa D: fis = Fischer de C2, C3, C4 ('D'/'I'); c1 permite poner un enlace en el C1
+  const confHexosa = (fis, an, c1) => ({ 1: c1 || anomerico(an), 2: cara(fis[0]), 3: cara(fis[1]), 4: cara(fis[2]), 5: { arriba: 'CH2OH', abajo: 'H' } });
+
+  /* ---------- proyección de Fischer ----------
+     filas de arriba abajo: 'CHO' | 'CO' (cetona) | 'CH2OH' | 'D' (OH a la derecha) | 'I' (OH a la izquierda) */
+  function fischer(d, x, y, filas) {
+    const cs = [], centros = [];
+    filas.forEach((f, k) => {
+      const yy = y + k * 1.25;
+      let c;
+      if (f === 'CHO') { c = d.a('C', x, yy); d.r(c, 180, 'H', { len: 0.85 }); d.r(c, 0, 'O', { ord: 2, len: 0.95 }); }
+      else if (f === 'CO') { c = d.a('C', x, yy); d.r(c, 0, 'O', { ord: 2, len: 0.95 }); }
+      else if (f === 'CH2OH') { c = d.a('C', x, yy, { h: 2 }); d.r(c, k === 0 ? -90 : 90, 'O', { h: 1, len: 0.95 }); }
+      else {
+        c = d.a('C', x, yy);
+        const izq = sus(d, c, 180, f === 'I' ? 'OH' : 'H', 1, x), der = sus(d, c, 0, f === 'D' ? 'OH' : 'H', 1, x);
+        centros.push({ k, c, izq, der });
+      }
+      if (cs.length) d.e(cs[cs.length - 1], c);
+      cs.push(c);
+    });
+    centros.forEach(z => d.fischer.push({ c: z.c, arriba: cs[z.k - 1], abajo: cs[z.k + 1], izq: z.izq, der: z.der }));
+    return cs;
+  }
+
+  /* ---------- ácidos grasos ----------
+     acilo(): C del carbonilo en (x,y) con =O hacia arriba y la cadena recta hacia la derecha.
+     cis = posición del doble enlace (9 en el oleico): se dibuja como un «escalón» con los
+     dos H del mismo lado (cis).                                                          */
+  function acilo(d, x, y, nC, cis) {
+    const c1 = d.a('C', x, y);
+    d.r(c1, -90, 'O', { ord: 2, len: 0.95 });
+    let prev = c1, px = x;
+    for (let k = 2; k <= nC; k++) {
+      let c;
+      if (cis && k === cis) {
+        c = d.a('C', px + 0.5, y + 0.866); d.e(prev, c); d.r(c, 120, 'H', { len: 0.8 });
+      } else if (cis && k === cis + 1) {
+        c = d.a('C', px + 1, y + 0.866); d.e(prev, c, 2); d.r(c, 60, 'H', { len: 0.8 });
+      } else if (cis && k === cis + 2) {
+        c = d.a('C', px + 0.5, y, { h: k === nC ? 3 : 2 }); d.e(prev, c);
+      } else {
+        c = d.a('C', px + 1, y, { h: k === nC ? 3 : 2 }); d.e(prev, c);
+      }
+      px = d.at[c].x; prev = c;
+    }
+    if (cis) d.texto(x + cis - 0.5 + 0.75, y + 2.2, 'cis');
+    return c1;
+  }
+
+  /* ---------- bases nitrogenadas ----------
+     Coordenadas locales (anillo de 6 de lado 1, «punta arriba»), giradas 'ang' grados y
+     colocadas de forma que el átomo 'ancla' quede en (ax, ay).                          */
+  function colocar(local, ang, anclaLocal, ax, ay, espejo) {
+    const c = Math.cos(ang * RAD), s = Math.sin(ang * RAD);
+    const rot = ([x, y]) => { if (espejo) y = -y; return [x * c - y * s, x * s + y * c]; };
+    const [rx, ry] = rot(anclaLocal);
+    const out = {};
+    for (const k in local) { const [x, y] = rot(local[k]); out[k] = [x + ax - rx, y + ay - ry]; }
+    return out;
+  }
+  const PURINA = { C6: [0, -1], C5: [0.866, -0.5], C4: [0.866, 0.5], N3: [0, 1], C2: [-0.866, 0.5], N1: [-0.866, -0.5],
+    N9: [1.817, 0.809], C8: [2.405, 0], N7: [1.817, -0.809] };
+  const PIRIM = { C4: [0, -1], C5: [0.866, -0.5], C6: [0.866, 0.5], N1: [0, 1], C2: [-0.866, 0.5], N3: [-0.866, -0.5] };
+  // dirección «hacia fuera» de cada átomo del anillo (en coordenadas locales)
+  const FUERA_PUR = { C6: -90, C2: 150, N1: 210, N3: 90, C8: 0, N7: -72, N9: 72 };
+  const FUERA_PIR = { C4: -90, C5: -30, C6: 30, N1: 90, C2: 150, N3: 210 };
+
+  // tipo: 'A' | 'G'; sust: { N9: 'H' | 'stub' | idExistente, N7: 'H' }; hExpl: dibujar los H del NH2 por separado
+  function purina(d, tipo, ang, ancla, pos, opt = {}) {
+    const P = colocar(PURINA, ang, PURINA[ancla], pos[0], pos[1]);
+    const id = {};
+    for (const k of ['N1', 'C2', 'N3', 'C4', 'C5', 'C6', 'N7', 'C8', 'N9']) {
+      if (k === 'N9' && typeof opt.N9 === 'number') { id.N9 = opt.N9; continue; }
+      id[k] = d.a(k[0], P[k][0], P[k][1]);
+    }
+    const dobles = tipo === 'A' ? [['N1', 'C6'], ['C2', 'N3'], ['C4', 'C5'], ['N7', 'C8']] : [['C2', 'N3'], ['C4', 'C5'], ['C8', 'N9']];
+    const enlaces = [['N1', 'C2'], ['C2', 'N3'], ['N3', 'C4'], ['C4', 'C5'], ['C5', 'C6'], ['C6', 'N1'], ['C5', 'N7'], ['N7', 'C8'], ['C8', 'N9'], ['N9', 'C4']];
+    enlaces.forEach(([a, b]) => d.e(id[a], id[b], dobles.some(([x, y]) => (x === a && y === b) || (x === b && y === a)) ? 2 : 1, { agn: true }));
+    const fuera = k => FUERA_PUR[k] + ang;
+    d.r(id.C8, fuera('C8'), 'H', { len: 0.8 });
+    if (tipo === 'A') {
+      d.r(id.C2, fuera('C2'), 'H', { len: 0.8 });
+      id.N6 = d.r(id.C6, fuera('C6'), 'N', { h: opt.hExpl ? 0 : 2 });
+      if (opt.hExpl) { id.H6a = d.r(id.N6, fuera('C6') - 60, 'H', { len: 0.8 }); id.H6b = d.r(id.N6, fuera('C6') + 60, 'H', { len: 0.8 }); }
+    } else {
+      d.r(id.C6, fuera('C6'), 'O', { ord: 2 }); id.O6 = d.at.length - 1;
+      id.N2 = d.r(id.C2, fuera('C2'), 'N', { h: opt.hExpl ? 0 : 2 });
+      if (opt.hExpl) { id.H2a = d.r(id.N2, fuera('C2') - 60, 'H', { len: 0.8 }); id.H2b = d.r(id.N2, fuera('C2') + 60, 'H', { len: 0.8 }); }
+      if (opt.N1H !== false) id.H1 = d.r(id.N1, fuera('N1'), 'H', { len: 0.8 });
+    }
+    if (opt.N7H) d.r(id.N7, fuera('N7'), 'H', { len: 0.8 });
+    if (opt.N9 === 'H') d.r(id.N9, fuera('N9'), 'H', { len: 0.8 });
+    if (opt.N9 === 'stub') id.C1 = d.r(id.N9, fuera('N9'), 'C');
+    return id;
+  }
+
+  // tipo: 'C' | 'T' | 'U'; opt.N1: 'H' | 'stub'; opt.N3H: H en N3
+  function pirimidina(d, tipo, ang, ancla, pos, opt = {}) {
+    const P = colocar(PIRIM, ang, PIRIM[ancla], pos[0], pos[1], opt.espejo);
+    const id = {};
+    for (const k of ['N1', 'C2', 'N3', 'C4', 'C5', 'C6']) id[k] = d.a(k[0], P[k][0], P[k][1]);
+    const dobles = tipo === 'C' ? (opt.N3H ? [['C4', 'C5'], ['C6', 'N1']] : [['N3', 'C4'], ['C5', 'C6']]) : [['C5', 'C6']];
+    [['N1', 'C2'], ['C2', 'N3'], ['N3', 'C4'], ['C4', 'C5'], ['C5', 'C6'], ['C6', 'N1']]
+      .forEach(([a, b]) => d.e(id[a], id[b], dobles.some(([x, y]) => (x === a && y === b) || (x === b && y === a)) ? 2 : 1, { agn: true }));
+    const fuera = k => (opt.espejo ? -FUERA_PIR[k] : FUERA_PIR[k]) + ang;
+    id.O2 = d.r(id.C2, fuera('C2'), 'O', { ord: 2 });
+    d.r(id.C6, fuera('C6'), 'H', { len: 0.8 });
+    if (tipo === 'C') {
+      id.N4 = d.r(id.C4, fuera('C4'), 'N', { h: opt.hExpl ? 0 : 2 });
+      if (opt.hExpl) { id.H4a = d.r(id.N4, fuera('C4') - 60, 'H', { len: 0.8 }); id.H4b = d.r(id.N4, fuera('C4') + 60, 'H', { len: 0.8 }); }
+      d.r(id.C5, fuera('C5'), 'H', { len: 0.8 });
+    } else {
+      id.O4 = d.r(id.C4, fuera('C4'), 'O', { ord: 2 });
+      if (tipo === 'T') d.r(id.C5, fuera('C5'), 'C', { h: 3 });
+      else d.r(id.C5, fuera('C5'), 'H', { len: 0.8 });
+    }
+    if (opt.N3H) id.H3 = d.r(id.N3, fuera('N3'), 'H', { len: 0.8 });
+    if (opt.N1 === 'H') d.r(id.N1, fuera('N1'), 'H', { len: 0.8 });
+    if (opt.N1 === 'stub') id.C1 = d.r(id.N1, fuera('N1'), 'C');
+    if (typeof opt.N1 === 'number') d.e(id.N1, opt.N1);
+    return id;
+  }
+
+  /* =================================================================
+     DIBUJOS DE CADA MOLÉCULA
+     ================================================================= */
+  const E = {};
+  const nuevo = f => { const d = new Dib(); f(d); return d; };
+
+  /* ---------------- AGUA ---------------- */
+  E.agua = [nuevo(d => {
+    const o = d.a('O', 0, 0);
+    d.r(o, 37.75, 'H', { len: 1.1 }); d.r(o, 142.25, 'H', { len: 1.1 });
+    d.texto(0, 1.55, '104,5°');
+  })];
+  E.agua_racimo = [nuevo(d => {
+    // molécula central: dona sus dos H (abajo) y acepta dos (arriba)
+    const o0 = d.a('O', 0, 0);
+    const h1 = d.r(o0, 52, 'H'), h2 = d.r(o0, 128, 'H');
+    const agua = (x, y, a1, a2) => { const o = d.a('O', x, y); return [o, d.r(o, a1, 'H'), d.r(o, a2, 'H')]; };
+    const [oA] = agua(0 + 2.9 * Math.cos(52 * RAD), 2.9 * Math.sin(52 * RAD), 0, 105);
+    const [oB] = agua(-2.9 * Math.cos(52 * RAD), 2.9 * Math.sin(52 * RAD), 180, 75);
+    const [oC, hC] = agua(-2.9 * Math.cos(52 * RAD), -2.9 * Math.sin(52 * RAD), 52, 156.5);
+    const [oD, hD] = agua(2.9 * Math.cos(52 * RAD), -2.9 * Math.sin(52 * RAD), 128, 23.5);
+    d.puente(h1, oA); d.puente(h2, oB); d.puente(hC, o0); d.puente(hD, o0);
+  })];
+
+  /* ---------------- GLÚCIDOS ---------------- */
+  const FIS = { glucosa: ['D', 'I', 'D', 'D'], manosa: ['I', 'I', 'D', 'D'], galactosa: ['D', 'I', 'I', 'D'] };
+  const lineal = fis => nuevo(d => fischer(d, 0, 0, ['CHO', ...fis, 'CH2OH']));
+  const piranosa = (fis, an) => nuevo(d => anillo(d, 0, 0, 'piranosa', confHexosa(fis, an)));
+  const fructosaLineal = () => nuevo(d => fischer(d, 0, 0, ['CH2OH', 'CO', 'I', 'D', 'D', 'CH2OH']));
+  const fructofuranosa = an => nuevo(d => anillo(d, 0, 0, 'furanosa', {
+    1: an === 'β' ? { arriba: 'OH', abajo: 'CH2OH' } : { arriba: 'CH2OH', abajo: 'OH' },
+    2: cara('I'), 3: cara('D'), 4: { arriba: 'CH2OH', abajo: 'H' },
+  }));
+  E.gliceraldehido = [nuevo(d => fischer(d, 0, 0, ['CHO', 'D', 'CH2OH']))];
+  E.dihidroxiacetona = [nuevo(d => fischer(d, 0, 0, ['CH2OH', 'CO', 'CH2OH']))];
+  E.glucosa_lineal = [lineal(FIS.glucosa)];
+  E.alfa_glucosa = [piranosa(FIS.glucosa, 'α')];
+  E.beta_glucosa = [piranosa(FIS.glucosa, 'β')];
+  E.manosa_lineal = [lineal(FIS.manosa)];
+  E.alfa_manosa = [piranosa(FIS.manosa, 'α')];
+  E.beta_manosa = [piranosa(FIS.manosa, 'β')];
+  E.galactosa_lineal = [lineal(FIS.galactosa)];
+  E.alfa_galactosa = [piranosa(FIS.galactosa, 'α')];
+  E.beta_galactosa = [piranosa(FIS.galactosa, 'β')];
+  E.fructosa_lineal = [fructosaLineal()];
+  E.fructosa = [fructofuranosa('β')];
+  E.alfa_fructosa = [fructofuranosa('α')];
+  E.ribosa = [nuevo(d => anillo(d, 0, 0, 'furanosa', { 1: anomerico('β'), 2: cara('D'), 3: cara('D'), 4: { arriba: 'CH2OH', abajo: 'H' } }))];
+  E.desoxirribosa = [nuevo(d => anillo(d, 0, 0, 'furanosa', { 1: anomerico('β'), 2: cara('H'), 3: cara('D'), 4: { arriba: 'CH2OH', abajo: 'H' } }))];
+  // ciclación: abierta (Fischer) o cerrada (Haworth), según el fotograma
+  E.cicl_glucosa_a = [lineal(FIS.glucosa), piranosa(FIS.glucosa, 'α')];
+  E.cicl_glucosa_b = [lineal(FIS.glucosa), piranosa(FIS.glucosa, 'β')];
+  E.cicl_fructosa_a = [fructosaLineal(), fructofuranosa('α')];
+  E.cicl_fructosa_b = [fructosaLineal(), fructofuranosa('β')];
+
+  /* --- disacáridos: dos anillos unidos por el O del enlace glucosídico --- */
+  // α(1→4): O abajo-derecha del C1; el C4 del 2.º anillo, arriba-derecha del O
+  function disacarido14(d, fisA, anA, fisB, anB, x0 = 0, y0 = 0, finA, finB) {
+    const beta = anA === 'β';
+    const A = anillo(d, x0, y0, 'piranosa', confHexosa(fisA, anA, beta ? { arriba: { t: 'O*', ang: -60 }, abajo: 'H' } : { arriba: 'H', abajo: { t: 'O*', ang: 60 } }));
+    const o = beta ? A['1a'] : A['1b'];
+    const [ox, oy] = [d.at[o].x, d.at[o].y];
+    const c4x = ox + 0.95 * 0.5, c4y = oy + (beta ? 0.95 * 0.866 : -0.95 * 0.866);
+    const conf = confHexosa(fisB, anB);
+    conf[4] = { arriba: 'H', abajo: { t: 'link', id: o } };
+    if (finB) conf[1] = finB;
+    const B = anillo(d, c4x + 1.3, c4y, 'piranosa', conf, { invertida: beta });
+    if (finA) finA(A);
+    return { A, B, o };
+  }
+  E.maltosa = [nuevo(d => disacarido14(d, FIS.glucosa, 'α', FIS.glucosa, 'α'))];
+  E.lactosa = [nuevo(d => disacarido14(d, FIS.galactosa, 'β', FIS.glucosa, 'β'))];
+  E.celobiosa = [nuevo(d => disacarido14(d, FIS.glucosa, 'β', FIS.glucosa, 'β'))];
+  E.sacarosa = [nuevo(d => {
+    const A = anillo(d, 0, 0, 'piranosa', confHexosa(FIS.glucosa, 'α', { arriba: 'H', abajo: { t: 'O*', ang: 60 } }));
+    const o = A['1b'];
+    const c2 = [d.at[o].x + 0.6, d.at[o].y + 1.35];
+    // β-fructofuranosa girada: el C2 (anomérico) a la izquierda, con el O del enlace arriba
+    anillo(d, c2[0] + 1.0, c2[1] + 0.33, 'furanosa', {
+      1: { arriba: { t: 'link', id: o }, abajo: 'CH2OH' }, 2: cara('I'), 3: cara('D'), 4: { arriba: 'CH2OH', abajo: 'H' },
+    }, { girada: true });
+  })];
+
+  /* --- polisacáridos: fragmento de 3 unidades (los «···» indican que la cadena sigue) --- */
+  function cadenaAlfa(d, x0, y0) {
+    let previo = null;
+    for (let k = 0; k < 3; k++) {
+      const conf = confHexosa(FIS.glucosa, 'α', { arriba: 'H', abajo: { t: 'O*', ang: 60 } });
+      conf[4] = previo === null ? { arriba: 'H', abajo: { t: 'O*', ang: 120 } } : { arriba: 'H', abajo: { t: 'link', id: previo } };
+      const R = anillo(d, x0 + k * 3.55, y0, 'piranosa', conf);
+      if (k === 0) d.r(R['4b'], -120, '*', { len: 0.95 });
+      previo = R['1b'];
+      if (k === 2) d.r(previo, -60, '*', { len: 0.95 });
+    }
+  }
+  function cadenaBeta(d, x0, y0) {
+    let previo = null;
+    for (let k = 0; k < 3; k++) {
+      const inv = k % 2 === 1;
+      const conf = confHexosa(FIS.glucosa, 'β', { arriba: { t: 'O*', ang: inv ? 60 : -60 }, abajo: 'H' });
+      conf[4] = previo === null ? { arriba: 'H', abajo: { t: 'O*', ang: 120 } } : { arriba: 'H', abajo: { t: 'link', id: previo } };
+      const R = anillo(d, x0 + k * 3.55, y0, 'piranosa', conf, { invertida: inv });
+      if (k === 0) d.r(R['4b'], 180, '*', { len: 0.95 });
+      previo = R['1a'];
+      if (k === 2) d.r(previo, 0, '*', { len: 0.95 });
+    }
+  }
+  E.amilosa = [nuevo(d => cadenaAlfa(d, 0, 0))];
+  E.celulosa_cadena = [nuevo(d => cadenaBeta(d, 0, 0))];
+  E.celulosa = [nuevo(d => cadenaBeta(d, 0, 0))];
+  E.almidon_vs_celulosa = [nuevo(d => {
+    cadenaAlfa(d, 0, 0); d.texto(3.55, -2.9, 'Almidón (amilosa): α(1→4)');
+    cadenaBeta(d, 0, 7); d.texto(3.55, 4.4, 'Celulosa: β(1→4), anillos alternados');
+  })];
+  E.amilopectina = [nuevo(d => {
+    // M: glucosa del punto de ramificación; N: siguiente de la cadena principal; R: rama α(1→6)
+    const confM = confHexosa(FIS.glucosa, 'α', { arriba: 'H', abajo: { t: 'O*', ang: 60 } });
+    confM[4] = { arriba: 'H', abajo: { t: 'O*', ang: 120 } };
+    confM[5] = { arriba: 'CH2*', abajo: 'H' };
+    const M = anillo(d, 0, 0, 'piranosa', confM);
+    d.r(M['4b'], -120, '*', { len: 0.95 });
+    const confN = confHexosa(FIS.glucosa, 'α', { arriba: 'H', abajo: { t: 'O*', ang: 60 } });
+    confN[4] = { arriba: 'H', abajo: { t: 'link', id: M['1b'] } };
+    const N = anillo(d, 0.475 + 0.475 + 1.3 + 1.3, 0, 'piranosa', confN);
+    d.r(N['1b'], -60, '*', { len: 0.95 });
+    const o6 = d.r(M['5a'], -90, 'O', { len: 1 });
+    const c1r = [d.at[o6].x - 0.475, d.at[o6].y - 0.823];
+    const confR = confHexosa(FIS.glucosa, 'α', { arriba: 'H', abajo: { t: 'link', id: o6 } });
+    confR[4] = { arriba: 'H', abajo: { t: 'O*', ang: 120 } };
+    const R = anillo(d, c1r[0] - 1.3, c1r[1], 'piranosa', confR);
+    d.r(R['4b'], -150, '*', { len: 0.95 });
+    d.texto(-1.6, -6.3, 'rama: enlace α(1→6)');
+  })];
+
+  /* ---------------- LÍPIDOS ---------------- */
+  const acidoLibre = (d, y, nC, cis) => { const c1 = acilo(d, 0, y, nC, cis); d.r(c1, 180, 'O', { h: 1, len: 0.95 }); return c1; };
+  E.estearico = [nuevo(d => acidoLibre(d, 0, 18))];
+  E.oleico = [nuevo(d => acidoLibre(d, 0, 18, 9))];
+  E.acidos_grasos_comparar = [nuevo(d => {
+    acidoLibre(d, 0, 18); d.texto(8.5, -1.9, 'Ácido esteárico (saturado)');
+    acidoLibre(d, 4.5, 18, 9); d.texto(8.5, 2.6, 'Ácido oleico (insaturado, cis)');
+  })];
+  // glicerol vertical a la izquierda; cada –O– y su ácido graso hacia la derecha
+  function glicerol(d, cadenas) {
+    const g = [d.a('C', 0, 0, { h: 2 }), d.a('C', 0, 3, { h: 1 }), d.a('C', 0, 6, { h: 2 })];
+    d.e(g[0], g[1]); d.e(g[1], g[2]);
+    cadenas.forEach((c, k) => {
+      if (!c) return;
+      const o = d.r(g[k], 0, 'O');
+      const c1 = acilo(d, 2, k * 3, c.n, c.cis);
+      d.e(o, c1);
+    });
+    return g;
+  }
+  E.trigliceridos = [nuevo(d => {
+    glicerol(d, [{ n: 16 }, { n: 18, cis: 9 }, { n: 18 }]);
+    d.texto(-0.2, -1.9, 'glicerol');
+  })];
+  E.fosfolipido = [nuevo(d => {
+    const g = glicerol(d, [{ n: 16 }, { n: 18, cis: 9 }, null]);
+    // cabeza polar: –O–P(=O)(O⁻)–O–CH₂–CH₂–N⁺(CH₃)₃ hacia la izquierda
+    const o3 = d.r(g[2], 180, 'O');
+    const p = d.r(o3, 180, 'P');
+    d.r(p, -90, 'O', { ord: 2, len: 0.95 }); d.r(p, 90, 'O', { carga: '−', len: 0.95 });
+    const o = d.r(p, 180, 'O'), ca = d.r(o, 180, 'C', { h: 2 }), cb = d.r(ca, 180, 'C', { h: 2 });
+    const n = d.r(cb, 180, 'N', { carga: '+' });
+    d.r(n, -90, 'C', { h: 3 }); d.r(n, 90, 'C', { h: 3 }); d.r(n, 180, 'C', { h: 3 });
+    d.texto(-5, -2.1, 'cabeza polar');
+    d.texto(9, -2.1, 'colas apolares');
+  })];
+  E.colesterol = [nuevo(d => {
+    // núcleo esteroide (ciclopentanoperhidrofenantreno), numeración clásica
+    const P = {
+      1: [0, -1], 2: [-0.866, -0.5], 3: [-0.866, 0.5], 4: [0, 1], 5: [0.866, 0.5], 10: [0.866, -0.5],
+      6: [1.732, 1], 7: [2.598, 0.5], 8: [2.598, -0.5], 9: [1.732, -1],
+      11: [1.732, -2], 12: [2.598, -2.5], 13: [3.464, -2], 14: [3.464, -1],
+      15: [4.415, -0.691], 16: [5.003, -1.5], 17: [4.415, -2.309],
+      18: [3.464, -3], 19: [0.866, -1.5],
+      20: [5.281, -2.809], 21: [5.281, -3.809], 22: [6.147, -2.309], 23: [7.013, -2.809], 24: [7.879, -2.309], 25: [8.745, -2.809],
+      26: [8.745, -3.809], 27: [9.611, -2.309],
+    };
+    const H = { 1: 2, 2: 2, 3: 1, 4: 2, 5: 0, 6: 1, 7: 2, 8: 1, 9: 1, 10: 0, 11: 2, 12: 2, 13: 0, 14: 1, 15: 2, 16: 2, 17: 1,
+      18: 3, 19: 3, 20: 1, 21: 3, 22: 2, 23: 2, 24: 2, 25: 1, 26: 3, 27: 3 };
+    const c = {};
+    for (const k in P) c[k] = d.a('C', P[k][0] * 1.15, P[k][1] * 1.15, { h: H[k] });
+    [[1, 2], [2, 3], [3, 4], [4, 5], [5, 10], [10, 1], [5, 6], [6, 7], [7, 8], [8, 9], [9, 10], [9, 11], [11, 12], [12, 13], [13, 14],
+      [14, 8], [14, 15], [15, 16], [16, 17], [17, 13], [13, 18], [10, 19], [17, 20], [20, 21], [20, 22], [22, 23], [23, 24], [24, 25], [25, 26], [25, 27]]
+      .forEach(([a, b]) => d.e(c[a], c[b], a === 5 && b === 6 ? 2 : 1));
+    d.r(c[3], 150, 'O', { h: 1 });
+  })];
+
+  /* ---------------- AMINOÁCIDOS Y PÉPTIDOS ---------------- */
+  // H₂N–Cα–COOH en horizontal, H arriba y radical R abajo
+  function aminoacido(d, R) {
+    const ca = d.a('C', 0, 0);
+    d.r(ca, 180, 'N', { h: 2 }); d.r(ca, -90, 'H', { len: 0.85 });
+    const c = d.r(ca, 0, 'C');
+    d.r(c, -90, 'O', { ord: 2, len: 0.95 }); d.r(c, 0, 'O', { h: 1, len: 0.95 });
+    R(ca);
+  }
+  const cadenaR = (d, desde, n) => { let p = desde; for (let k = 0; k < n; k++) p = d.r(p, 90, 'C', { h: 2 }); return p; };
+  E.glicina = [nuevo(d => aminoacido(d, ca => d.r(ca, 90, 'H', { len: 0.85 })))];
+  E.alanina = [nuevo(d => aminoacido(d, ca => d.r(ca, 90, 'C', { h: 3 })))];
+  E.serina = [nuevo(d => aminoacido(d, ca => d.r(cadenaR(d, ca, 1), 90, 'O', { h: 1 })))];
+  E.cisteina = [nuevo(d => aminoacido(d, ca => d.r(cadenaR(d, ca, 1), 90, 'S', { h: 1 })))];
+  E.lisina = [nuevo(d => aminoacido(d, ca => d.r(cadenaR(d, ca, 4), 90, 'N', { h: 2 })))];
+  E.aspartico = [nuevo(d => aminoacido(d, ca => {
+    const cg = d.r(cadenaR(d, ca, 1), 90, 'C');
+    d.r(cg, 0, 'O', { ord: 2, len: 0.95 }); d.r(cg, 90, 'O', { h: 1, len: 0.95 });
+  }))];
+  E.fenilalanina = [nuevo(d => aminoacido(d, ca => {
+    const cb = cadenaR(d, ca, 1);
+    const ip = d.r(cb, 90, 'C');
+    const [x, y] = [d.at[ip].x, d.at[ip].y + 1];
+    const v = [[0.866, -0.5], [0.866, 0.5], [0, 1], [-0.866, 0.5], [-0.866, -0.5]].map(([a, b]) => d.a('C', x + a, y + b, { h: 1 }));
+    const ciclo = [ip, ...v];
+    ciclo.forEach((a, k) => d.e(a, ciclo[(k + 1) % 6], k % 2 === 0 ? 2 : 1, { agn: true }));
+  }))];
+  E.gly_ala = [nuevo(d => {
+    const n1 = d.a('N', 0, 0, { h: 2 });
+    const ca1 = d.r(n1, 0, 'C'); d.r(ca1, -90, 'H', { len: 0.85 }); d.r(ca1, 90, 'H', { len: 0.85 });
+    const c1 = d.r(ca1, 0, 'C'); d.r(c1, -90, 'O', { ord: 2, len: 0.95 });
+    const n2 = d.r(c1, 0, 'N'); d.r(n2, 90, 'H', { len: 0.85 });
+    const ca2 = d.r(n2, 0, 'C'); d.r(ca2, -90, 'H', { len: 0.85 }); d.r(ca2, 90, 'C', { h: 3 });
+    const c2 = d.r(ca2, 0, 'C'); d.r(c2, -90, 'O', { ord: 2, len: 0.95 }); d.r(c2, 0, 'O', { h: 1, len: 0.95 });
+    d.texto(0.5, 2, 'Glicina'); d.texto(4.5, 2, 'Alanina');
+  })];
+
+  /* ---------------- NUCLEÓTIDOS Y BASES ---------------- */
+  function nucleotido(d, desoxi, nFosfatos) {
+    // pentosa (furanosa) centrada en el origen; la base sale del C1′ hacia arriba-derecha
+    const c1 = [PEN[1][0], PEN[1][1]];
+    const n9pos = [c1[0] + 0.5, c1[1] - 0.866];
+    const base = purina(d, 'A', 126, 'N9', n9pos, {});
+    const S = anillo(d, 0, 0, 'furanosa', {
+      1: { arriba: { t: 'link', id: base.N9 }, abajo: 'H' }, 2: desoxi ? cara('H') : cara('D'), 3: cara('D'), 4: { arriba: 'CH2*', abajo: 'H' },
+    });
+    // fosfato(s) unidos al O del C5′
+    let o = d.r(S['4a'], 180, 'O');
+    for (let k = 0; k < nFosfatos; k++) {
+      const p = d.r(o, 180, 'P');
+      d.r(p, -90, 'O', { ord: 2, len: 0.95 }); d.r(p, 90, 'O', { h: 1, len: 0.95 });
+      o = d.r(p, 180, 'O', k === nFosfatos - 1 ? { h: 1 } : {});
+    }
+    d.texto(2.2, -4.3, 'base (adenina)');
+    d.texto(0, 2.4, desoxi ? 'desoxirribosa' : 'ribosa');
+    d.texto(-1.8 - nFosfatos, 2.4, nFosfatos > 1 ? `${nFosfatos} fosfatos` : 'fosfato');
+  }
+  E.damp = [nuevo(d => nucleotido(d, true, 1))];
+  E.amp = [nuevo(d => nucleotido(d, false, 1))];
+  E.atp = [nuevo(d => nucleotido(d, false, 3))];
+  // PubChem (CID 190) da el tautómero 7H-adenina: el H está en el N7
+  E.adenina = [nuevo(d => purina(d, 'A', 0, 'C4', [0.866, 0.5], { N7H: true }))];
+  E.guanina = [nuevo(d => purina(d, 'G', 0, 'C4', [0.866, 0.5], { N7H: true }))];
+  E.citosina = [nuevo(d => pirimidina(d, 'C', 0, 'N1', [0, 1], { N3H: true }))];
+  E.timina = [nuevo(d => pirimidina(d, 'T', 0, 'N1', [0, 1], { N1: 'H', N3H: true }))];
+  E.uracilo = [nuevo(d => pirimidina(d, 'U', 0, 'N1', [0, 1], { N1: 'H', N3H: true }))];
+  // pares de bases: la púrica a la izquierda con su borde Watson-Crick hacia la derecha
+  function par(d, purTipo, pirTipo) {
+    // púrica girada 150º: N1 mirando a la derecha; pirimidínica en espejo y girada 30º: N3 mirando a la izquierda
+    const A = purina(d, purTipo, 150, 'C4', [0, 0], { N9: 'stub', hExpl: true });
+    const nA = A.N1, pA = [d.at[nA].x, d.at[nA].y];
+    const B = pirimidina(d, pirTipo, 30, 'N3', [pA[0] + 2.9, pA[1]], { N1: 'stub', N3H: pirTipo !== 'C', hExpl: true, espejo: true });
+    if (purTipo === 'A') {
+      d.puente(A.H6a, B.O4); d.puente(B.H3, A.N1);
+    } else {
+      d.puente(B.H4b, A.O6); d.puente(A.H1, B.N3); d.puente(A.H2b, B.O2);
+    }
+  }
+  E.par_AT = [nuevo(d => par(d, 'A', 'T'))];
+  E.par_AU = [nuevo(d => par(d, 'A', 'U'))];
+  E.par_GC = [nuevo(d => par(d, 'G', 'C'))];
+
+  return E;
+})();
+
+</script>
+  <script>/* js/vista-estudio.js */
+/* =====================================================================
+   vista-estudio.js — «Forma de estudio»: dibuja en SVG los dibujos de
+   js/estudio.js (fondo blanco, trazo negro) y los relaciona átomo a átomo
+   con la estructura 3D para sincronizar los resaltados.
+     · emparejar(dib, atomos, an): correspondencia dibujo → átomos 3D
+       (comprueba elementos, enlaces, H escritos, estereoquímica y puentes de H)
+     · montar(contenedor) / dibujar(opciones)
+   ===================================================================== */
+const VistaEstudio = (() => {
+  const ESC = 44;
+  const SUB = n => String(n).replace(/\d/g, d => '₀₁₂₃₄₅₆₇₈₉'[d]);
+  const COLOR_EL = { O: '#c92a2a', N: '#1c4fd6', P: '#d9480f', S: '#a37200' };
+
+  /* =============== CORRESPONDENCIA DIBUJO ↔ 3D =============== */
+  function emparejar(dib, A, an) {
+    const S = dib.at, nS = S.length;
+    const adj = S.map(() => []);
+    dib.en.forEach(b => { adj[b.a].push({ j: b.b, o: b.o, agn: b.agn }); adj[b.b].push({ j: b.a, o: b.o, agn: b.agn }); });
+    const real = S.map(s => s.el !== '*');
+    const grado = u => adj[u].length + S[u].h;
+    const orden3 = (i, j) => { const k = A[i].bonds.indexOf(j); return k < 0 ? 0 : (A[i].bondOrder ? A[i].bondOrder[k] || 1 : 1); };
+    // orden de búsqueda: en anchura, empezando por los elementos menos frecuentes
+    const rareza = { P: 0, S: 1, N: 2, O: 3, C: 4, H: 5 };
+    const ordenBusq = [], padre = new Array(nS).fill(-1), visto = new Array(nS).fill(false);
+    while (true) {
+      const libres = S.map((s, i) => i).filter(i => real[i] && !visto[i]);
+      if (!libres.length) break;
+      libres.sort((a, b) => (rareza[S[a].el] ?? 9) - (rareza[S[b].el] ?? 9) || grado(b) - grado(a));
+      const cola = [libres[0]]; visto[libres[0]] = true;
+      while (cola.length) {
+        const u = cola.shift(); ordenBusq.push(u);
+        for (const { j } of adj[u]) if (real[j] && !visto[j]) { visto[j] = true; padre[j] = u; cola.push(j); }
+      }
+    }
+    const map = new Array(nS).fill(-1), usado = new Set();
+    let pasos = 0;
+    const LIMITE = 3e6;
+
+    const compatible = (u, i) => {
+      if (A[i].elem !== S[u].el || A[i].bonds.length !== grado(u) || usado.has(i)) return false;
+      for (const { j, o, agn } of adj[u]) {
+        if (!real[j] || map[j] < 0) continue;
+        const o3 = orden3(i, map[j]);
+        if (!o3) return false;
+        if (!agn && o !== o3) return false;
+      }
+      return true;
+    };
+    const vec = (a, b) => [A[a].x - A[b].x, A[a].y - A[b].y, A[a].z - A[b].z];
+    const prod = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    const cruz = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+
+    function validar() {
+      // 1) los H escritos junto al símbolo y los enlaces no dibujados
+      const implicitos = new Array(nS).fill(null).map(() => []);
+      const asignado = new Set(map.filter(x => x >= 0));
+      for (let u = 0; u < nS; u++) {
+        if (!real[u]) continue;
+        const vecinosDib = new Set(adj[u].filter(x => real[x.j]).map(x => map[x.j]));
+        const extra = A[map[u]].bonds.filter(i => !vecinosDib.has(i));
+        const pseudo = adj[u].filter(x => !real[x.j]).length;
+        if (extra.length !== pseudo + S[u].h) return null;
+        // «···» representa la continuación de la cadena: debe ser un átomo pesado, no un H
+        if (extra.filter(i => A[i].elem !== 'H').length !== pseudo) return null;
+        const hs = extra.filter(i => A[i].elem === 'H' && !asignado.has(i));
+        if (hs.length < S[u].h) return null;
+        // un átomo dibujado no puede estar unido a otro dibujado sin que se dibuje el enlace
+        if (extra.some(i => asignado.has(i))) return null;
+        implicitos[u] = hs.slice(0, S[u].h);
+      }
+      // 2) Haworth: cada sustituyente en su cara del anillo
+      for (const r of dib.anillos) {
+        const P = r.ciclo.map(u => A[map[u]]);
+        let n = [0, 0, 0];
+        const c = [0, 0, 0]; P.forEach(p => { c[0] += p.x; c[1] += p.y; c[2] += p.z; }); c.forEach((v, k) => c[k] = v / P.length);
+        for (let k = 0; k < P.length; k++) {
+          const a = [P[k].x - c[0], P[k].y - c[1], P[k].z - c[2]], b = [P[(k + 1) % P.length].x - c[0], P[(k + 1) % P.length].y - c[1], P[(k + 1) % P.length].z - c[2]];
+          const q = cruz(a, b); n = n.map((v, t) => v + q[t]);
+        }
+        let ref = null;
+        for (const s of r.subs) {
+          if (!real[s.x]) continue;
+          const v = Math.sign(prod(vec(map[s.x], map[s.c]), n)) * (s.arriba ? 1 : -1);
+          if (ref === null) ref = v; else if (v !== ref) return null;
+        }
+      }
+      // 3) Fischer: horizontales hacia el observador, verticales hacia atrás
+      for (const f of dib.fischer) {
+        const C = map[f.c], U = vec(map[f.arriba], C), R = vec(map[f.der], C), L = vec(map[f.izq], C);
+        if (prod(U, cruz(R, L)) >= 0) return null;
+      }
+      // 4) puentes de hidrógeno dibujados = puentes reales
+      for (const [h, acc] of dib.hb) {
+        if (!an.hbonds.some(x => (x.a === map[h] && x.b === map[acc]) || (x.b === map[h] && x.a === map[acc]))) return null;
+      }
+      return implicitos;
+    }
+
+    let resultado = null;
+    function buscar(k) {
+      if (++pasos > LIMITE) return true;
+      if (k === ordenBusq.length) { const imp = validar(); if (imp) { resultado = { map: map.slice(), implicitos: imp }; return true; } return false; }
+      const u = ordenBusq[k];
+      const cand = padre[u] < 0 ? A.map((_, i) => i) : A[map[padre[u]]].bonds;
+      for (const i of cand) {
+        if (!compatible(u, i)) continue;
+        map[u] = i; usado.add(i);
+        if (buscar(k + 1)) return true;
+        map[u] = -1; usado.delete(i);
+      }
+      return false;
+    }
+    buscar(0);
+    return resultado;
+  }
+
+  /* =============== ZOOM Y DESPLAZAMIENTO =============== */
+  let cont = null, svg = null, vista = null, clave = null, alPulsar = null;
+  function montar(c) {
+    cont = c;
+    cont.innerHTML = `<div class="est-barra"></div><div class="est-lienzo"></div>
+      <div class="v2d-botones est-zoom">
+        <button class="btn-icono" data-z="1.25" title="Acercar" aria-label="Acercar">+</button>
+        <button class="btn-icono" data-z="0.8" title="Alejar" aria-label="Alejar">−</button>
+        <button class="btn-icono" data-z="0" title="Ajustar" aria-label="Ajustar">⤢</button>
+      </div>`;
+    cont.querySelectorAll('[data-z]').forEach(b => b.onclick = () => {
+      const z = +b.dataset.z; if (!z) return ajustar();
+      zoom(1 / z, vista.x + vista.w / 2, vista.y + vista.h / 2);
+    });
+    const lienzo = cont.querySelector('.est-lienzo');
+    lienzo.addEventListener('wheel', e => { e.preventDefault(); const p = aSvg(e.clientX, e.clientY); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12, p.x, p.y); }, { passive: false });
+    const punteros = new Map(); let inicio = null, distIni = 0, moviendo = false;
+    lienzo.addEventListener('pointerdown', e => {
+      punteros.set(e.pointerId, { x: e.clientX, y: e.clientY }); inicio = { x: e.clientX, y: e.clientY, v: { ...vista } }; moviendo = false;
+      if (punteros.size === 2) { const [a, b] = [...punteros.values()]; distIni = Math.hypot(a.x - b.x, a.y - b.y); }
+    });
+    lienzo.addEventListener('pointermove', e => {
+      if (!punteros.has(e.pointerId) || !inicio) return;
+      punteros.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const r = lienzo.getBoundingClientRect(), k = inicio.v.w / r.width;
+      if (punteros.size === 2) {
+        const [a, b] = [...punteros.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (distIni > 0) { const c2 = aSvg((a.x + b.x) / 2, (a.y + b.y) / 2); zoom(distIni / d, c2.x, c2.y); distIni = d; }
+        moviendo = true; return;
+      }
+      const dx = e.clientX - inicio.x, dy = e.clientY - inicio.y;
+      if (Math.hypot(dx, dy) > 4) moviendo = true;
+      if (moviendo) { vista.x = inicio.v.x - dx * k; vista.y = inicio.v.y - dy * k; aplicar(); lienzo.setPointerCapture(e.pointerId); }
+    });
+    const fin = e => { punteros.delete(e.pointerId); if (!punteros.size) inicio = null; };
+    lienzo.addEventListener('pointerup', e => {
+      if (!moviendo && alPulsar) {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const t = el && el.closest('[data-n],[data-b],[data-h],[data-t]');
+        if (t) alPulsar(t.dataset);
+      }
+      fin(e);
+    });
+    lienzo.addEventListener('pointercancel', fin);
+  }
+  function aSvg(cx, cy) {
+    const r = cont.querySelector('.est-lienzo').getBoundingClientRect();
+    return { x: vista.x + (cx - r.left) / r.width * vista.w, y: vista.y + (cy - r.top) / r.height * vista.h };
+  }
+  function zoom(f, px, py) { vista.x = px - (px - vista.x) * f; vista.y = py - (py - vista.y) * f; vista.w *= f; vista.h *= f; aplicar(); }
+  function aplicar() { if (svg && vista) svg.setAttribute('viewBox', `${vista.x} ${vista.y} ${vista.w} ${vista.h}`); }
+  function ajustar() {
+    if (!svg) return;
+    const caja = svg.querySelector('.est-contenido').getBBox(), r = cont.querySelector('.est-lienzo').getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return;
+    const m = 26, w = caja.width + 2 * m, h = caja.height + 2 * m, asp = r.width / Math.max(1, r.height);
+    vista = w / h > asp ? { x: caja.x - m, y: caja.y - m - (w / asp - h) / 2, w, h: w / asp } : { x: caja.x - m - (h * asp - w) / 2, y: caja.y - m, w: h * asp, h };
+    aplicar();
+  }
+
+  /* =============== DIBUJO =============== */
+  // texto de cada átomo: símbolo + H escritos (los H a la izquierda si el átomo enlaza hacia la derecha)
+  function etiqueta(dib, u) {
+    const s = dib.at[u];
+    if (s.el === '*') return '···';
+    const carga = s.carga === '+' ? '⁺' : s.carga ? '⁻' : '';
+    if (!s.h) return s.el + carga;
+    const vec = dib.en.filter(b => b.a === u || b.b === u).map(b => dib.at[b.a === u ? b.b : b.a]);
+    const dx = vec.reduce((t, v) => t + v.x - s.x, 0) / Math.max(1, vec.length);
+    const hs = 'H' + (s.h > 1 ? SUB(s.h) : '');
+    return (vec.length && dx > 0.3 ? hs + s.el : s.el + hs) + carga;
+  }
+  const ancho = t => [...t].reduce((a, c) => a + ('₀₁₂₃₄₅₆₇₈₉⁺⁻'.includes(c) ? 0.42 : c === '·' ? 0.3 : 0.62), 0) * 17;
+
+  /* p: { dib, res (correspondencia), atomos, an, mapa, sel, practica, enlacesActivos, gruposActivos, alPulsar, clave } */
+  function dibujar(p) {
+    alPulsar = p.alPulsar;
+    const { dib, res } = p, A = p.atomos;
+    const pos = u => ({ x: dib.at[u].x * ESC, y: dib.at[u].y * ESC });
+    // átomos 3D de cada nodo del dibujo y nodo de cada átomo 3D
+    const atomosNodo = u => res ? [res.map[u], ...(res.implicitos[u] || [])].filter(i => i >= 0) : [];
+    const nodoDe = new Map();
+    if (res) dib.at.forEach((s, u) => atomosNodo(u).forEach(i => nodoDe.set(i, u)));
+    const etq = dib.at.map((s, u) => { const t = etiqueta(dib, u); return { t, w: ancho(t) / 2 + 2, h: 10 }; });
+    const recortar = (a, b, e) => {
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+      const s = Math.min(e.w / Math.abs(dx / L || 1e-9), e.h / Math.abs(dy / L || 1e-9));
+      return { x: a.x + dx / L * s, y: a.y + dy / L * s };
+    };
+    const capas = { fondo: [], cajas: [], enl: [], hb: [], at: [], tags: [], txt: [] };
+    const etiquetas = [];   // para los clics en las etiquetas
+    // enlaces
+    dib.en.forEach((b, k) => {
+      const pa = pos(b.a), pb = pos(b.b), a1 = recortar(pa, pb, etq[b.a]), b1 = recortar(pb, pa, etq[b.b]);
+      const par = res ? [res.map[b.a], res.map[b.b]] : [];
+      const resalte = p.enlacesActivos.find(x => x.pares.some(([i, j]) => (i === par[0] && j === par[1]) || (i === par[1] && j === par[0])));
+      const sel = par.length && p.sel.has(par[0]) && p.sel.has(par[1]);
+      if (resalte || sel) capas.fondo.push(`<line x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}" stroke="${sel ? '#fab005' : resalte.color}" stroke-width="12" stroke-linecap="round" opacity="${sel ? 0.75 : 0.45}"/>`);
+      const dx = b1.x - a1.x, dy = b1.y - a1.y, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+      const linea = off => `<line x1="${a1.x + nx * off}" y1="${a1.y + ny * off}" x2="${b1.x + nx * off}" y2="${b1.y + ny * off}"/>`;
+      const g = b.o === 2 ? linea(3) + linea(-3) : linea(0);
+      capas.enl.push(`<g class="est-enlace" data-b="${k}"><line class="est-diana" x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}"/>${g}</g>`);
+    });
+    // puentes de hidrógeno
+    const hbActivo = p.puentesActivos;
+    dib.hb.forEach(([h, acc], k) => {
+      const pa = pos(h), pb = pos(acc), a1 = recortar(pa, pb, etq[h]), b1 = recortar(pb, pa, etq[acc]);
+      const sel = res && p.sel.has(res.map[h]) && p.sel.has(res.map[acc]);
+      capas.hb.push(`<g class="est-hb" data-h="${k}"><line class="est-diana" x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}"/>` +
+        `<line x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}" stroke="${sel ? '#e67700' : hbActivo ? '#0c8599' : '#222'}" stroke-width="2.2" stroke-dasharray="5 4"/></g>`);
+    });
+    // átomos
+    dib.at.forEach((s, u) => {
+      const q = pos(u), e = etq[u];
+      const ats = atomosNodo(u);
+      const col = ats.map(i => p.mapa.get(i)).find(Boolean);
+      const sel = ats.some(i => p.sel.has(i));
+      const fondo = sel ? `<rect x="${q.x - e.w - 3}" y="${q.y - e.h - 4}" width="${2 * e.w + 6}" height="${2 * e.h + 8}" rx="8" fill="#ffe066" stroke="#f59f00" stroke-width="2"/>`
+        : col ? `<rect x="${q.x - e.w - 2}" y="${q.y - e.h - 3}" width="${2 * e.w + 4}" height="${2 * e.h + 6}" rx="7" fill="${col.color}" opacity=".3"/>` : '';
+      const color = s.el === '*' ? '#868e96' : (col && !sel ? col.color : COLOR_EL[s.el] || '#111');
+      capas.at.push(`<g class="est-atomo" data-n="${u}">${fondo}<rect x="${q.x - e.w}" y="${q.y - e.h}" width="${2 * e.w}" height="${2 * e.h}" fill="#fff"/>` +
+        `<text x="${q.x}" y="${q.y}" fill="${color}">${e.t}</text></g>`);
+    });
+    // cajas (éster y peptídico) y etiquetas con el nombre de los enlaces característicos
+    const CAJA = ['ester', 'peptidico'];
+    const NOMBRAR = ['glucosidico', 'n_glucosidico', 'ester', 'peptidico', 'fosfoester', 'fosfodiester', 'fosfoanhidrido', 'hemiacetal', 'disulfuro'];
+    const pendientes = [];
+    const tag = (x, y, texto, color, info, lugar = 'abajo') => pendientes.push({ x, y, texto, color, info, lugar });
+    if (res) {
+      Object.entries(p.an.enlaces).forEach(([k, lista]) => {
+        if (!NOMBRAR.includes(k)) return;
+        lista.forEach(inst => {
+          const ats = inst.pares.flat();
+          if (!ats.every(i => nodoDe.has(i))) return;
+          const nodos = [...new Set(ats.map(i => nodoDe.get(i)))];
+          const color = (CATALOGO[k] || {}).color || '#333';
+          const titulo = (inst.titulo || CATALOGO[k].nombre).replace(/^Enlace /, 'enlace ');
+          if (CAJA.includes(k)) {
+            // la caja rodea –CO–O– (éster) o –CO–NH– (peptídico): el C del carbonilo con su =O
+            // y el O o el N; no incluye el carbono del alcohol
+            const [ci, xi] = inst.pares[0];
+            const base = [nodoDe.get(ci), nodoDe.get(xi)];
+            const extra = [];
+            base.forEach(u => dib.en.forEach(b => {
+              const v = b.a === u ? b.b : b.b === u ? b.a : -1;
+              if (v < 0) return;
+              if ((dib.at[v].el === 'O' && b.o === 2) || (dib.at[u].el === 'N' && dib.at[v].el === 'H')) extra.push(v);
+            }));
+            const todos = [...new Set([...base, ...extra])].map(pos);
+            const x0 = Math.min(...todos.map(q => q.x)) - 20, x1 = Math.max(...todos.map(q => q.x)) + 20;
+            const y0 = Math.min(...todos.map(q => q.y)) - 16, y1 = Math.max(...todos.map(q => q.y)) + 16;
+            capas.cajas.push(`<rect class="est-caja" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" rx="8" stroke="${color}"/>`);
+            // etiqueta pegada encima de su caja
+            const texto = p.practica ? '?' : titulo, w = ancho(texto) * 0.68 + 14, cx = (x0 + x1) / 2, ty = y0 - 15;
+            etiquetas.push({ tipo: 'enlace', k, inst });
+            capas.tags.push(`<g class="est-tag" data-t="${etiquetas.length - 1}"><rect x="${cx - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="#fff" stroke="${color}" stroke-width="1.6"/>` +
+              `<text x="${cx}" y="${ty + 0.5}" fill="${color}">${texto}</text></g>`);
+          } else {
+            const q = nodos.map(pos), cx = q.reduce((t, v) => t + v.x, 0) / q.length, cy = q.reduce((t, v) => t + v.y, 0) / q.length;
+            tag(cx, cy, titulo, color, { tipo: 'enlace', k, inst });
+          }
+        });
+      });
+      // grupos funcionales resaltados con los botones de «Resaltar»
+      p.gruposActivos.forEach(({ k, inst, color, nombre }) => {
+        const nodos = [...new Set(inst.atomos.filter(i => nodoDe.has(i)).map(i => nodoDe.get(i)))];
+        if (!nodos.length) return;
+        const q = nodos.map(pos), x = q.reduce((t, v) => t + v.x, 0) / q.length, y = Math.min(...q.map(v => v.y));
+        tag(x, y, nombre, color, { tipo: 'grupo', k, inst }, 'cerca');
+      });
+    }
+    // carriles de etiquetas: debajo (enlaces) y encima (grupos) del dibujo, con una línea guía
+    const xs = dib.at.map(a => a.x * ESC), ys = dib.at.map(a => a.y * ESC).concat(dib.textos.map(t => t.y * ESC));
+    const yMin = Math.min(...ys) - 34, yMax = Math.max(...ys) + 40;
+    // las etiquetas de grupo van al carril (arriba o abajo) más cercano
+    pendientes.forEach(t => { if (t.lugar === 'cerca') t.lugar = (t.y - yMin) < (yMax - t.y) ? 'arriba' : 'abajo'; });
+    ['abajo', 'arriba'].forEach(lugar => {
+      const filas = [];
+      pendientes.filter(t => t.lugar === lugar).sort((a, b) => a.x - b.x).forEach(t => {
+        const texto = p.practica ? '?' : t.texto, w = ancho(texto) * 0.68 + 14;
+        let fila = filas.findIndex(f => f < t.x - w / 2 - 6);
+        if (fila < 0) { filas.push(0); fila = filas.length - 1; }
+        filas[fila] = t.x + w / 2;
+        const ty = lugar === 'abajo' ? yMax + fila * 30 : yMin - fila * 30;
+        etiquetas.push(t.info);
+        capas.tags.push(`<g class="est-tag" data-t="${etiquetas.length - 1}">` +
+          `<line x1="${t.x}" y1="${t.y}" x2="${t.x}" y2="${ty + (lugar === 'abajo' ? -11 : 11)}" stroke="${t.color}" stroke-width="1.2" stroke-dasharray="3 3" opacity=".8"/>` +
+          `<rect x="${t.x - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="#fff" stroke="${t.color}" stroke-width="1.6"/>` +
+          `<text x="${t.x}" y="${ty + 0.5}" fill="${t.color}">${texto}</text></g>`);
+      });
+    });
+    dib.textos.forEach(t => capas.txt.push(`<text class="est-nota" x="${t.x * ESC}" y="${t.y * ESC}">${t.t}</text>`));
+    const svgTxt = `<svg xmlns="http://www.w3.org/2000/svg" class="est-svg"><g class="est-contenido">${capas.fondo.join('')}${capas.cajas.join('')}${capas.tags.join('')}${capas.enl.join('')}${capas.hb.join('')}${capas.at.join('')}${capas.txt.join('')}</g></svg>`;
+    const lienzo = cont.querySelector('.est-lienzo');
+    lienzo.innerHTML = svgTxt;
+    svg = lienzo.querySelector('svg');
+    if (clave !== p.clave || !vista) { clave = p.clave; requestAnimationFrame(ajustar); } else aplicar();
+    return etiquetas;
+  }
+
+  return { emparejar, montar, dibujar, barra: () => cont && cont.querySelector('.est-barra'), ajustar };
+})();
+
+</script>
   <script>
 /* 65 estructuras incluidas */
 window.ESTRUCTURAS = {
@@ -2703,7 +3555,9 @@ window.ESTRUCTURAS = {
     resaltes: new Set(), etqAtomos: false, etqRes: false,
     descompuesto: false, marcar: null, resSel: null,
     // ajustes de vista elegidos por el usuario: se conservan al cambiar de molécula
-    pref: { rep: null, rep3d: null, color: null, etqAtomos: false, etqRes: false, modo2d: null },
+    pref: { rep: null, rep3d: null, color: null, etqAtomos: false, etqRes: false, modo2d: null, vista2d: 'real' },
+    // selección compartida por la vista 3D, la 2D real y la forma de estudio (índices de átomos 3D)
+    sel: new Set(), vista2d: 'real', practica: false, estudio: null,
   };
   let visor = null;
 
@@ -2741,7 +3595,8 @@ window.ESTRUCTURAS = {
     const cambiaMol = !estado.mol || estado.mol.id !== id;
     if (estado.cicl) { clearInterval(estado.cicl.anim); estado.cicl = null; }
     estado.mol = mol; estado.variante = variante; estado.vista = 0;
-    estado.descompuesto = false; estado.marcar = opciones.marcar || null; estado.resSel = null;
+    estado.descompuesto = false; estado.marcar = opciones.marcar || null; estado.resSel = null; estado.sel = new Set();
+    estado.vista2d = estado.pref.vista2d;
     const me = molEfectiva();
     aplicarPreferencias(me);
     estado.guia = !!me.guia;
@@ -2808,7 +3663,7 @@ window.ESTRUCTURAS = {
     $('#cargando').hidden = false;
     visor.removeAllModels(); visor.removeAllShapes(); visor.removeAllLabels();
     // mientras carga, no se muestra nada de la molécula anterior
-    estado.modelo = null; estado.an = null; estado.atomos = []; estado.datos = null;
+    estado.modelo = null; estado.an = null; estado.atomos = []; estado.datos = null; estado.estudio = null;
     $('#barraCicl').hidden = true;
     pintarBarra(); pintarResaltar(); pintarLeyenda(); pintarInfo(); $('#secuencia').hidden = true; $('#selVista').hidden = true;
     let datos;
@@ -2952,7 +3807,7 @@ window.ESTRUCTURAS = {
   const visible = i => estado.visibles.has(i);
 
   // índice átomo → color del resaltado de grupo activo
-  function mapaResaltado() {
+  function mapaResaltado(conSeleccion = true) {
     const mapa = new Map(), an = estado.an, me = molEfectiva();
     if (!an) return mapa;
     for (const k of estado.resaltes) {
@@ -2979,7 +3834,27 @@ window.ESTRUCTURAS = {
     } else if (estado.marcar && CATALOGO[estado.marcar] && CATALOGO[estado.marcar].tipo === 'grupo') {
       (an.grupos[estado.marcar] || []).forEach(inst => inst.atomos.forEach(i => mapa.set(i, { color: '#ff00ff', clave: estado.marcar })));
     }
+    // lo seleccionado (en cualquiera de las vistas) se ve en amarillo en todas
+    if (conSeleccion) estado.sel.forEach(i => mapa.set(i, { ...(mapa.get(i) || {}), color: COLOR_SEL, soloC: false, sel: true }));
     return mapa;
+  }
+  const COLOR_SEL = '#fab005';
+
+  function aplicarSeleccion(lista) {
+    estado.sel = new Set(lista);
+    if (estado.rep === '2d' && !enEstudio()) marcarSel2D();
+    else pintar();
+  }
+  // en la 2D real sólo se marca lo seleccionado (sin volver a dibujarla, para no perder el zoom)
+  function marcarSel2D() {
+    $$('#cont2d [data-i]').forEach(g => g.classList.toggle('v2d-sel', estado.sel.has(+g.dataset.i)));
+  }
+  const enEstudio = () => estado.vista2d === 'estudio' && !!dibujosEstudio();
+  const dibujosEstudio = () => (typeof ESTUDIO !== 'undefined' ? ESTUDIO : {})[molEfectiva().estructura] || null;
+  function atomosDeGrupo(clave, i) {
+    if (clave.startsWith('g:')) { const g = (molEfectiva().grupos || []).find(x => 'g:' + x.id === clave); return g ? atomosGrupo(g) : [i]; }
+    const inst = (estado.an.grupos[clave] || []).find(x => x.atomos.includes(i));
+    return inst ? inst.atomos : [i];
   }
 
   // átomos de un grupo especial definido por selección en moleculas.js
@@ -3030,7 +3905,7 @@ window.ESTRUCTURAS = {
     $('#vista2d').hidden = estado.rep !== '2d';
     if (estado.rep === '2d') {
       pintar2D(mapa); pintarLeyenda(mapa);
-      $('#leyenda').hidden = ['fischer', 'haworth', 'ciclacion'].includes(estado.modo2d);
+      $('#leyenda').hidden = ['fischer', 'haworth', 'ciclacion'].includes(estado.modo2d) || enEstudio();
       return;
     }
     $('#leyenda').hidden = false;
@@ -3084,6 +3959,15 @@ window.ESTRUCTURAS = {
 
   function pintar2D(mapa) {
     const me = molEfectiva(), an = estado.an, d2 = estado.datos && estado.datos.d2;
+    // interruptor [Real] / [Estudio]
+    const dibs = dibujosEstudio(), estudio = enEstudio();
+    $$('#interruptor2d [data-v2]').forEach(b => {
+      b.classList.toggle('activo', b.dataset.v2 === (estudio ? 'estudio' : 'real'));
+      if (b.dataset.v2 === 'estudio') { b.disabled = !dibs; b.title = dibs ? 'Forma simplificada de los libros y la PAU' : 'Esta estructura no tiene forma de estudio'; }
+    });
+    // la 2D real se oculta sin perder su tamaño (así su ajuste de zoom pendiente no falla)
+    $('#modos2d').hidden = estudio; $('#cont2d').classList.toggle('oculto-medible', estudio); $('#contEstudio').hidden = !estudio;
+    if (estudio) return pintarEstudio(mapa, dibs);
     if (!montado2D) { Vista2D.montar($('#cont2d')); montado2D = true; }
     const modos = [];
     if (me.ciclacion) modos.push(['ciclacion', 'Ciclación paso a paso']);
@@ -3114,6 +3998,7 @@ window.ESTRUCTURAS = {
     });
     const hb = (me.plano2d && (estado.resaltes.has('puente_h') || estado.marcar === 'puente_h'))
       ? an.hbonds.map((h, k) => ({ ...h, k, color: estado.resaltes.has('puente_h') ? CATALOGO.puente_h.color : '#ff00ff' })) : [];
+    setTimeout(marcarSel2D, 0);
     Vista2D.formula({
       atomos: estado.atomos, xy, cunas, conH, mapa, enlacesRes: lista, hbonds: hb, numeros: estado.etqAtomos,
       pie: conH ? 'Fórmula <b>desarrollada</b>: cada átomo con su símbolo y cada enlace con una raya (doble enlace = dos rayas). ' + (cunas.length ? 'Cuña negra: enlace hacia el observador; cuña rayada: hacia atrás.' : '')
@@ -3125,6 +4010,87 @@ window.ESTRUCTURAS = {
         x.neutro ? detalleOculto() : detalleEnlace(x.clave, x.inst);
       },
     });
+  }
+
+  /* ================= FORMA DE ESTUDIO ================= */
+  let montadoEstudio = false;
+  function pintarEstudio(mapa, dibs) {
+    if (!montadoEstudio) { VistaEstudio.montar($('#contEstudio')); montadoEstudio = true; }
+    const me = molEfectiva(), an = estado.an;
+    // se busca el dibujo que encaja con la estructura actual (en la ciclación cambia al cerrarse el anillo)
+    const clave = me.estructura + '|' + (estado.cicl ? estado.cicl.cerrada : '');
+    if (!estado.estudio || estado.estudio.clave !== clave) {
+      let elegido = null;
+      for (const dib of dibs) { const res = VistaEstudio.emparejar(dib, estado.atomos, an); if (res) { elegido = { dib, res }; break; } }
+      estado.estudio = { clave, ...(elegido || { dib: dibs[0], res: null }) };
+    }
+    const { dib, res } = estado.estudio;
+    const barra = VistaEstudio.barra();
+    barra.innerHTML = `<button class="chip${estado.practica ? ' activo' : ''}" id="btnPractica">${estado.practica ? '👁 Mostrar etiquetas' : '🙈 Ocultar etiquetas'}</button>` +
+      (estado.sel.size ? '<button class="chip" id="btnQuitarSel">✕ Quitar selección</button>' : '') +
+      `<span>${!res ? '<b style="color:#c92a2a">⚠ Este dibujo no coincide con la estructura 3D: no se puede sincronizar.</b>'
+        : estado.practica ? 'Modo práctica: identifica los enlaces y grupos marcados con «?» y pulsa «Mostrar etiquetas».'
+        : 'Pulsa un átomo, un enlace o una etiqueta: se resalta también en 3D y en la 2D real.'}</span>`;
+    $('#btnPractica').onclick = () => { estado.practica = !estado.practica; pintar(); };
+    if ($('#btnQuitarSel')) $('#btnQuitarSel').onclick = () => aplicarSeleccion([]);
+    const enlacesActivos = [];
+    Object.keys(an.enlaces).forEach(k => {
+      const activo = estado.resaltes.has(k), marcado = estado.marcar === k;
+      if (activo || marcado) an.enlaces[k].forEach(inst => enlacesActivos.push({ pares: inst.pares, color: activo ? CATALOGO[k].color : '#ff00ff' }));
+    });
+    const gruposActivos = [];
+    estado.resaltes.forEach(k => {
+      if (CATALOGO[k] && CATALOGO[k].tipo === 'grupo') (an.grupos[k] || []).forEach(inst =>
+        gruposActivos.push({ k, inst, color: CATALOGO[k].color, nombre: CATALOGO[k].nombre.replace(/^Grupo /, '') }));
+    });
+    estado.estudio.tags = VistaEstudio.dibujar({
+      dib, res, atomos: estado.atomos, an, mapa, sel: estado.sel, practica: estado.practica, clave,
+      enlacesActivos, gruposActivos, puentesActivos: estado.resaltes.has('puente_h'), alPulsar: clicEstudio,
+    });
+  }
+
+  function clicEstudio(ds) {
+    const est = estado.estudio; if (!est || !est.res) return;
+    const { dib, res, tags } = est, A = estado.atomos, an = estado.an;
+    const mostrar = fn => estado.practica ? practica(fn) : fn();
+    if (ds.n !== undefined) {
+      const u = +ds.n; if (dib.at[u].el === '*') return;
+      return mostrar(() => alPulsarAtomo(A[res.map[u]], res.implicitos[u]));
+    }
+    if (ds.b !== undefined) {
+      const b = dib.en[+ds.b], i = res.map[b.a], j = res.map[b.b];
+      if (i < 0 || j < 0) return;
+      for (const k of Object.keys(an.enlaces)) {
+        if (k === 'covalente') continue;
+        const inst = an.enlaces[k].find(x => x.pares.some(([p, q]) => (p === i && q === j) || (p === j && q === i)));
+        if (inst) return mostrar(() => { detalleEnlace(k, inst); aplicarSeleccion(inst.pares.flat()); });
+      }
+      return mostrar(() => { fichaEnlaceSimple(i, j, b.o); aplicarSeleccion([i, j]); });
+    }
+    if (ds.h !== undefined) {
+      const [h, acc] = dib.hb[+ds.h], i = res.map[h], j = res.map[acc];
+      const x = an.hbonds.find(z => (z.a === i && z.b === j) || (z.a === j && z.b === i));
+      if (x) return mostrar(() => { detallePuenteH(x); aplicarSeleccion([i, j]); });
+    }
+    if (ds.t !== undefined) {
+      const t = tags[+ds.t]; if (!t) return;
+      return mostrar(() => {
+        if (t.tipo === 'enlace') { detalleEnlace(t.k, t.inst); aplicarSeleccion(t.inst.pares.flat()); }
+        else { detalleGrupo(t.k, t.inst.atomos[0]); aplicarSeleccion(t.inst.atomos); }
+      });
+    }
+  }
+  function practica(fn) {
+    ficha('¿Qué es?', '#868e96', `<p><b>Modo práctica.</b> Antes de mirar la respuesta, intenta decir qué es lo que has pulsado: su nombre, qué une, cómo se forma y cómo se rompe.</p>
+      <button class="btn primario" id="verRespuesta">Ver la respuesta</button>`);
+    $('#verRespuesta').onclick = fn;
+  }
+  function fichaEnlaceSimple(i, j, orden) {
+    const a = estado.atomos[i], b = estado.atomos[j];
+    const polar = [a.elem, b.elem].includes('H') && ['O', 'N'].some(e => [a.elem, b.elem].includes(e));
+    ficha(`Enlace covalente ${orden === 2 ? 'doble' : 'simple'} ${a.elem}–${b.elem}`, '#495057',
+      `<p>Los dos átomos comparten ${orden === 2 ? '<b>dos pares</b>' : '<b>un par</b>'} de electrones.${polar ? ' Es <b>polar</b>: el O o el N atrae más los electrones que el H (cargas parciales δ⁻ y δ⁺).' : ''}</p>
+       <p class="vacio">No es uno de los enlaces característicos que unen monómeros.</p>`);
   }
 
   /* ================= CICLACIÓN (animación) ================= */
@@ -3140,6 +4106,7 @@ window.ESTRUCTURAS = {
     lista.forEach(([i, j, o]) => { A[i].bonds.push(j); A[i].bondOrder.push(o); A[j].bonds.push(i); A[j].bondOrder.push(o); });
   }
   function reanalizar() {
+    estado.sel = new Set();
     estado.atomos.forEach(a => { delete a._num; delete a._numero; delete a._calfa; });
     estado.an = Analisis.analizar(estado.atomos, molEfectiva());
     pintarResaltar(); pintarInfo();
@@ -3554,26 +4521,27 @@ window.ESTRUCTURAS = {
     ficha('Modo «Descomponer»', '#2f6fdd', `<p><b>${mons.length}</b> unidades separadas.</p><p>${rotos}</p><h4>Unidades</h4><div class="lista-monomeros">${filas}</div>${cuenta.size > 40 ? '<p class="vacio">…</p>' : ''}<p class="vacio">Pulsa otra vez «Descomponer» para volver a unirlas.</p>`);
   }
 
-  function alPulsarAtomo(atom) {
-    const i = atom._i, mapa = mapaResaltado(), an = estado.an, me = molEfectiva();
+  function alPulsarAtomo(atom, extras = []) {
+    const i = atom._i, mapa = mapaResaltado(false), an = estado.an, me = molEfectiva();
     if (estado.descompuesto) {
       const m = an.monomeros[an.monomero[i]];
       return ficha(m.etiqueta, PALETA[an.monomero[i] % PALETA.length], `<p>${m.formula ? `Fórmula del fragmento: <b>${m.formula}</b>` : ''}</p>`);
     }
     const r = mapa.get(i);
-    if (r && r.clave === estado.marcar) return detalleOculto();
-    if (r && r.enlace) return detalleEnlace(r.clave, r.enlace);
-    if (r) return detalleGrupo(r.clave, i);
+    if (r && r.clave === estado.marcar) { detalleOculto(); return aplicarSeleccion([i, ...extras]); }
+    if (r && r.enlace) { detalleEnlace(r.clave, r.enlace); return aplicarSeleccion(r.enlace.pares.flat()); }
+    if (r) { detalleGrupo(r.clave, i); return aplicarSeleccion(atomosDeGrupo(r.clave, i)); }
     for (const k of Object.keys(an.enlaces)) {
       if (!estado.resaltes.has(k)) continue;
       const inst = an.enlaces[k].find(e => e.pares.some(p => p.includes(i)));
-      if (inst) return detalleEnlace(k, inst);
+      if (inst) { detalleEnlace(k, inst); return aplicarSeleccion(inst.pares.flat()); }
     }
     const m = an.monomeros[an.monomero[i]];
     const nombre = NOMBRE_ELEMENTO[atom.elem] || atom.elem;
     ficha(`${nombre}${atom._num ? ' · ' + atom._num : ''}${atom._calfa ? ' · carbono α' : ''}`, COLORES_ELEMENTO[atom.elem] || '#999', `
       ${me.macro ? `<p>Residuo: <b>${Analisis.NOMBRES_RESIDUO[atom.resn] || atom.resn} ${atom.resi}</b> (cadena ${atom.chain}); átomo <b>${atom.atom}</b>.</p>` : `<p>Forma parte de: <b>${m.etiqueta}</b>.</p>`}
       <p>Enlazado a: ${atom.bonds.map(j => estado.atomos[j]).map(b => b._num || (me.macro ? b.atom : b.elem)).join(', ') || 'ningún átomo'}.</p>`);
+    aplicarSeleccion([i, ...extras]);
   }
   window.mostrarDetalleExterno = d => ficha(d.titulo, '#2f6fdd', `<p>${d.texto}</p>`);
 
@@ -3730,6 +4698,7 @@ window.ESTRUCTURAS = {
     $('#btnEtqRes').onclick = () => { estado.etqRes = estado.pref.etqRes = !estado.etqRes; pintarBarra(); pintar(); };
     $('#btnDescomponer').onclick = descomponer;
     $('#btnGuia').onclick = () => { estado.guia = !estado.guia; pintarBarra(); pintar(); };
+    $$('#interruptor2d [data-v2]').forEach(b => b.onclick = () => { estado.vista2d = estado.pref.vista2d = b.dataset.v2; pintar(); });
     $('#btnCiclar').onclick = () => { if (estado.cicl) { verEn3D(); animarCiclacion(estado.cicl.n); } };
     $('#btnAbrirCadena').onclick = () => { if (estado.cicl) { verEn3D(); animarCiclacion(0); } };
     $('#rangoCicl').oninput = e => { if (estado.cicl) { clearInterval(estado.cicl.anim); irFotograma(+e.target.value, false); } };

@@ -15,6 +15,11 @@ Web educativa de una sola página para explorar en 3D las biomoléculas de Biolo
    **pulsa sobre lo resaltado**: en la pestaña *Detalle* verás qué une, cómo se forma y cómo se rompe.
 4. Pulsa **2D** para ver la fórmula en el plano (cada átomo con su símbolo y rayas para los enlaces; con o sin H).
    En los monosacáridos también tienes la **proyección de Fischer** y la de **Haworth**.
+   En la vista 2D hay un interruptor **[Real] / [Estudio]**. *Real* es la fórmula calculada desde la estructura
+   (no cambia). *Estudio* es la forma simplificada de los libros y la PAU (Haworth, Fischer, cadenas rectas,
+   enlaces éster y peptídico recuadrados, puentes de H discontinuos). Al pulsar un átomo, un enlace o una
+   etiqueta se resalta lo mismo en la 3D y en la 2D real (y al revés). Con **«Ocultar etiquetas»** practicas:
+   los nombres se convierten en «?» y tienes que identificarlos antes de pulsar «Mostrar etiquetas».
 5. En *Ciclación de la glucosa / de la fructosa* pulsa **▶ Ciclar** para ver cómo la cadena abierta se cierra
    en anillo (enlace hemiacetal o hemicetal) y elige si se forma el anómero α o el β.
 6. Usa **⇄ Descomponer** para separar el polímero en sus monómeros, y la pestaña **Test** para practicar.
@@ -33,7 +38,9 @@ js/moleculas.js            CONTENIDOS: bloques, fichas, textos PAU, preguntas de
 js/analisis.js             Detección automática de grupos funcionales, enlaces, puentes de H y monómeros
 js/app.js                  Visor 3D (3Dmol.js), resaltados, etiquetas, descomponer, test y paneles
 js/esquema-enzima.js       Esquema animado enzima-sustrato (llave-cerradura / ajuste inducido)
-js/vista2d.js              Vista 2D: fórmula desarrollada, sin H, Fischer, Haworth y Fischer → Haworth
+js/vista2d.js              Vista 2D real: fórmula desarrollada, sin H, Fischer, Haworth y ciclación paso a paso
+js/estudio.js              DATOS de la forma de estudio: un dibujo a mano por estructura (coordenadas propias)
+js/vista-estudio.js        Forma de estudio: dibujo SVG y correspondencia átomo a átomo con la 3D
 lib/3Dmol-min.js           Librería 3Dmol.js 2.5.5 (copia local; si falta se usa el CDN)
 estructuras/*.js           Una estructura por archivo (cargadas bajo demanda; funcionan con file://)
 estructuras/fuentes/       Las mismas estructuras en formato SDF/PDB estándar
@@ -50,7 +57,10 @@ datos_raw/                 Descargas originales de PubChem y RCSB usadas por los
 2. Añade una entrada al array `MOLECULAS` de `js/moleculas.js` (los campos están comentados al principio
    del archivo). Los grupos funcionales, enlaces y monómeros se detectan solos a partir de los enlaces.
    Para añadir preguntas, edita `PREGUNTAS_EXTRA` al final del mismo archivo.
-3. Ejecuta `python3 herramientas/empaquetar.py` para regenerar `index.html` (no necesita RDKit).
+3. Si quieres su forma de estudio, añade un dibujo en `js/estudio.js` con la misma clave que la estructura.
+   La web comprueba sola que el dibujo coincide con la 3D (átomos, enlaces, H y lado de cada –OH) y avisa
+   «Este dibujo no coincide» si hay un error.
+4. Ejecuta `python3 herramientas/empaquetar.py` para regenerar `index.html` (no necesita RDKit).
    Mientras editas puedes abrir `fuente.html` directamente para ver los cambios sin regenerar.
 
 ## Fuentes de datos

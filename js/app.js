@@ -55,7 +55,9 @@
     resaltes: new Set(), etqAtomos: false, etqRes: false,
     descompuesto: false, marcar: null, resSel: null,
     // ajustes de vista elegidos por el usuario: se conservan al cambiar de molécula
-    pref: { rep: null, rep3d: null, color: null, etqAtomos: false, etqRes: false, modo2d: null },
+    pref: { rep: null, rep3d: null, color: null, etqAtomos: false, etqRes: false, modo2d: null, vista2d: 'real' },
+    // selección compartida por la vista 3D, la 2D real y la forma de estudio (índices de átomos 3D)
+    sel: new Set(), vista2d: 'real', practica: false, estudio: null,
   };
   let visor = null;
 
@@ -93,7 +95,8 @@
     const cambiaMol = !estado.mol || estado.mol.id !== id;
     if (estado.cicl) { clearInterval(estado.cicl.anim); estado.cicl = null; }
     estado.mol = mol; estado.variante = variante; estado.vista = 0;
-    estado.descompuesto = false; estado.marcar = opciones.marcar || null; estado.resSel = null;
+    estado.descompuesto = false; estado.marcar = opciones.marcar || null; estado.resSel = null; estado.sel = new Set();
+    estado.vista2d = estado.pref.vista2d;
     const me = molEfectiva();
     aplicarPreferencias(me);
     estado.guia = !!me.guia;
@@ -160,7 +163,7 @@
     $('#cargando').hidden = false;
     visor.removeAllModels(); visor.removeAllShapes(); visor.removeAllLabels();
     // mientras carga, no se muestra nada de la molécula anterior
-    estado.modelo = null; estado.an = null; estado.atomos = []; estado.datos = null;
+    estado.modelo = null; estado.an = null; estado.atomos = []; estado.datos = null; estado.estudio = null;
     $('#barraCicl').hidden = true;
     pintarBarra(); pintarResaltar(); pintarLeyenda(); pintarInfo(); $('#secuencia').hidden = true; $('#selVista').hidden = true;
     let datos;
@@ -304,7 +307,7 @@
   const visible = i => estado.visibles.has(i);
 
   // índice átomo → color del resaltado de grupo activo
-  function mapaResaltado() {
+  function mapaResaltado(conSeleccion = true) {
     const mapa = new Map(), an = estado.an, me = molEfectiva();
     if (!an) return mapa;
     for (const k of estado.resaltes) {
@@ -331,7 +334,27 @@
     } else if (estado.marcar && CATALOGO[estado.marcar] && CATALOGO[estado.marcar].tipo === 'grupo') {
       (an.grupos[estado.marcar] || []).forEach(inst => inst.atomos.forEach(i => mapa.set(i, { color: '#ff00ff', clave: estado.marcar })));
     }
+    // lo seleccionado (en cualquiera de las vistas) se ve en amarillo en todas
+    if (conSeleccion) estado.sel.forEach(i => mapa.set(i, { ...(mapa.get(i) || {}), color: COLOR_SEL, soloC: false, sel: true }));
     return mapa;
+  }
+  const COLOR_SEL = '#fab005';
+
+  function aplicarSeleccion(lista) {
+    estado.sel = new Set(lista);
+    if (estado.rep === '2d' && !enEstudio()) marcarSel2D();
+    else pintar();
+  }
+  // en la 2D real sólo se marca lo seleccionado (sin volver a dibujarla, para no perder el zoom)
+  function marcarSel2D() {
+    $$('#cont2d [data-i]').forEach(g => g.classList.toggle('v2d-sel', estado.sel.has(+g.dataset.i)));
+  }
+  const enEstudio = () => estado.vista2d === 'estudio' && !!dibujosEstudio();
+  const dibujosEstudio = () => (typeof ESTUDIO !== 'undefined' ? ESTUDIO : {})[molEfectiva().estructura] || null;
+  function atomosDeGrupo(clave, i) {
+    if (clave.startsWith('g:')) { const g = (molEfectiva().grupos || []).find(x => 'g:' + x.id === clave); return g ? atomosGrupo(g) : [i]; }
+    const inst = (estado.an.grupos[clave] || []).find(x => x.atomos.includes(i));
+    return inst ? inst.atomos : [i];
   }
 
   // átomos de un grupo especial definido por selección en moleculas.js
@@ -382,7 +405,7 @@
     $('#vista2d').hidden = estado.rep !== '2d';
     if (estado.rep === '2d') {
       pintar2D(mapa); pintarLeyenda(mapa);
-      $('#leyenda').hidden = ['fischer', 'haworth', 'ciclacion'].includes(estado.modo2d);
+      $('#leyenda').hidden = ['fischer', 'haworth', 'ciclacion'].includes(estado.modo2d) || enEstudio();
       return;
     }
     $('#leyenda').hidden = false;
@@ -436,6 +459,15 @@
 
   function pintar2D(mapa) {
     const me = molEfectiva(), an = estado.an, d2 = estado.datos && estado.datos.d2;
+    // interruptor [Real] / [Estudio]
+    const dibs = dibujosEstudio(), estudio = enEstudio();
+    $$('#interruptor2d [data-v2]').forEach(b => {
+      b.classList.toggle('activo', b.dataset.v2 === (estudio ? 'estudio' : 'real'));
+      if (b.dataset.v2 === 'estudio') { b.disabled = !dibs; b.title = dibs ? 'Forma simplificada de los libros y la PAU' : 'Esta estructura no tiene forma de estudio'; }
+    });
+    // la 2D real se oculta sin perder su tamaño (así su ajuste de zoom pendiente no falla)
+    $('#modos2d').hidden = estudio; $('#cont2d').classList.toggle('oculto-medible', estudio); $('#contEstudio').hidden = !estudio;
+    if (estudio) return pintarEstudio(mapa, dibs);
     if (!montado2D) { Vista2D.montar($('#cont2d')); montado2D = true; }
     const modos = [];
     if (me.ciclacion) modos.push(['ciclacion', 'Ciclación paso a paso']);
@@ -466,6 +498,7 @@
     });
     const hb = (me.plano2d && (estado.resaltes.has('puente_h') || estado.marcar === 'puente_h'))
       ? an.hbonds.map((h, k) => ({ ...h, k, color: estado.resaltes.has('puente_h') ? CATALOGO.puente_h.color : '#ff00ff' })) : [];
+    setTimeout(marcarSel2D, 0);
     Vista2D.formula({
       atomos: estado.atomos, xy, cunas, conH, mapa, enlacesRes: lista, hbonds: hb, numeros: estado.etqAtomos,
       pie: conH ? 'Fórmula <b>desarrollada</b>: cada átomo con su símbolo y cada enlace con una raya (doble enlace = dos rayas). ' + (cunas.length ? 'Cuña negra: enlace hacia el observador; cuña rayada: hacia atrás.' : '')
@@ -477,6 +510,87 @@
         x.neutro ? detalleOculto() : detalleEnlace(x.clave, x.inst);
       },
     });
+  }
+
+  /* ================= FORMA DE ESTUDIO ================= */
+  let montadoEstudio = false;
+  function pintarEstudio(mapa, dibs) {
+    if (!montadoEstudio) { VistaEstudio.montar($('#contEstudio')); montadoEstudio = true; }
+    const me = molEfectiva(), an = estado.an;
+    // se busca el dibujo que encaja con la estructura actual (en la ciclación cambia al cerrarse el anillo)
+    const clave = me.estructura + '|' + (estado.cicl ? estado.cicl.cerrada : '');
+    if (!estado.estudio || estado.estudio.clave !== clave) {
+      let elegido = null;
+      for (const dib of dibs) { const res = VistaEstudio.emparejar(dib, estado.atomos, an); if (res) { elegido = { dib, res }; break; } }
+      estado.estudio = { clave, ...(elegido || { dib: dibs[0], res: null }) };
+    }
+    const { dib, res } = estado.estudio;
+    const barra = VistaEstudio.barra();
+    barra.innerHTML = `<button class="chip${estado.practica ? ' activo' : ''}" id="btnPractica">${estado.practica ? '👁 Mostrar etiquetas' : '🙈 Ocultar etiquetas'}</button>` +
+      (estado.sel.size ? '<button class="chip" id="btnQuitarSel">✕ Quitar selección</button>' : '') +
+      `<span>${!res ? '<b style="color:#c92a2a">⚠ Este dibujo no coincide con la estructura 3D: no se puede sincronizar.</b>'
+        : estado.practica ? 'Modo práctica: identifica los enlaces y grupos marcados con «?» y pulsa «Mostrar etiquetas».'
+        : 'Pulsa un átomo, un enlace o una etiqueta: se resalta también en 3D y en la 2D real.'}</span>`;
+    $('#btnPractica').onclick = () => { estado.practica = !estado.practica; pintar(); };
+    if ($('#btnQuitarSel')) $('#btnQuitarSel').onclick = () => aplicarSeleccion([]);
+    const enlacesActivos = [];
+    Object.keys(an.enlaces).forEach(k => {
+      const activo = estado.resaltes.has(k), marcado = estado.marcar === k;
+      if (activo || marcado) an.enlaces[k].forEach(inst => enlacesActivos.push({ pares: inst.pares, color: activo ? CATALOGO[k].color : '#ff00ff' }));
+    });
+    const gruposActivos = [];
+    estado.resaltes.forEach(k => {
+      if (CATALOGO[k] && CATALOGO[k].tipo === 'grupo') (an.grupos[k] || []).forEach(inst =>
+        gruposActivos.push({ k, inst, color: CATALOGO[k].color, nombre: CATALOGO[k].nombre.replace(/^Grupo /, '') }));
+    });
+    estado.estudio.tags = VistaEstudio.dibujar({
+      dib, res, atomos: estado.atomos, an, mapa, sel: estado.sel, practica: estado.practica, clave,
+      enlacesActivos, gruposActivos, puentesActivos: estado.resaltes.has('puente_h'), alPulsar: clicEstudio,
+    });
+  }
+
+  function clicEstudio(ds) {
+    const est = estado.estudio; if (!est || !est.res) return;
+    const { dib, res, tags } = est, A = estado.atomos, an = estado.an;
+    const mostrar = fn => estado.practica ? practica(fn) : fn();
+    if (ds.n !== undefined) {
+      const u = +ds.n; if (dib.at[u].el === '*') return;
+      return mostrar(() => alPulsarAtomo(A[res.map[u]], res.implicitos[u]));
+    }
+    if (ds.b !== undefined) {
+      const b = dib.en[+ds.b], i = res.map[b.a], j = res.map[b.b];
+      if (i < 0 || j < 0) return;
+      for (const k of Object.keys(an.enlaces)) {
+        if (k === 'covalente') continue;
+        const inst = an.enlaces[k].find(x => x.pares.some(([p, q]) => (p === i && q === j) || (p === j && q === i)));
+        if (inst) return mostrar(() => { detalleEnlace(k, inst); aplicarSeleccion(inst.pares.flat()); });
+      }
+      return mostrar(() => { fichaEnlaceSimple(i, j, b.o); aplicarSeleccion([i, j]); });
+    }
+    if (ds.h !== undefined) {
+      const [h, acc] = dib.hb[+ds.h], i = res.map[h], j = res.map[acc];
+      const x = an.hbonds.find(z => (z.a === i && z.b === j) || (z.a === j && z.b === i));
+      if (x) return mostrar(() => { detallePuenteH(x); aplicarSeleccion([i, j]); });
+    }
+    if (ds.t !== undefined) {
+      const t = tags[+ds.t]; if (!t) return;
+      return mostrar(() => {
+        if (t.tipo === 'enlace') { detalleEnlace(t.k, t.inst); aplicarSeleccion(t.inst.pares.flat()); }
+        else { detalleGrupo(t.k, t.inst.atomos[0]); aplicarSeleccion(t.inst.atomos); }
+      });
+    }
+  }
+  function practica(fn) {
+    ficha('¿Qué es?', '#868e96', `<p><b>Modo práctica.</b> Antes de mirar la respuesta, intenta decir qué es lo que has pulsado: su nombre, qué une, cómo se forma y cómo se rompe.</p>
+      <button class="btn primario" id="verRespuesta">Ver la respuesta</button>`);
+    $('#verRespuesta').onclick = fn;
+  }
+  function fichaEnlaceSimple(i, j, orden) {
+    const a = estado.atomos[i], b = estado.atomos[j];
+    const polar = [a.elem, b.elem].includes('H') && ['O', 'N'].some(e => [a.elem, b.elem].includes(e));
+    ficha(`Enlace covalente ${orden === 2 ? 'doble' : 'simple'} ${a.elem}–${b.elem}`, '#495057',
+      `<p>Los dos átomos comparten ${orden === 2 ? '<b>dos pares</b>' : '<b>un par</b>'} de electrones.${polar ? ' Es <b>polar</b>: el O o el N atrae más los electrones que el H (cargas parciales δ⁻ y δ⁺).' : ''}</p>
+       <p class="vacio">No es uno de los enlaces característicos que unen monómeros.</p>`);
   }
 
   /* ================= CICLACIÓN (animación) ================= */
@@ -492,6 +606,7 @@
     lista.forEach(([i, j, o]) => { A[i].bonds.push(j); A[i].bondOrder.push(o); A[j].bonds.push(i); A[j].bondOrder.push(o); });
   }
   function reanalizar() {
+    estado.sel = new Set();
     estado.atomos.forEach(a => { delete a._num; delete a._numero; delete a._calfa; });
     estado.an = Analisis.analizar(estado.atomos, molEfectiva());
     pintarResaltar(); pintarInfo();
@@ -906,26 +1021,27 @@
     ficha('Modo «Descomponer»', '#2f6fdd', `<p><b>${mons.length}</b> unidades separadas.</p><p>${rotos}</p><h4>Unidades</h4><div class="lista-monomeros">${filas}</div>${cuenta.size > 40 ? '<p class="vacio">…</p>' : ''}<p class="vacio">Pulsa otra vez «Descomponer» para volver a unirlas.</p>`);
   }
 
-  function alPulsarAtomo(atom) {
-    const i = atom._i, mapa = mapaResaltado(), an = estado.an, me = molEfectiva();
+  function alPulsarAtomo(atom, extras = []) {
+    const i = atom._i, mapa = mapaResaltado(false), an = estado.an, me = molEfectiva();
     if (estado.descompuesto) {
       const m = an.monomeros[an.monomero[i]];
       return ficha(m.etiqueta, PALETA[an.monomero[i] % PALETA.length], `<p>${m.formula ? `Fórmula del fragmento: <b>${m.formula}</b>` : ''}</p>`);
     }
     const r = mapa.get(i);
-    if (r && r.clave === estado.marcar) return detalleOculto();
-    if (r && r.enlace) return detalleEnlace(r.clave, r.enlace);
-    if (r) return detalleGrupo(r.clave, i);
+    if (r && r.clave === estado.marcar) { detalleOculto(); return aplicarSeleccion([i, ...extras]); }
+    if (r && r.enlace) { detalleEnlace(r.clave, r.enlace); return aplicarSeleccion(r.enlace.pares.flat()); }
+    if (r) { detalleGrupo(r.clave, i); return aplicarSeleccion(atomosDeGrupo(r.clave, i)); }
     for (const k of Object.keys(an.enlaces)) {
       if (!estado.resaltes.has(k)) continue;
       const inst = an.enlaces[k].find(e => e.pares.some(p => p.includes(i)));
-      if (inst) return detalleEnlace(k, inst);
+      if (inst) { detalleEnlace(k, inst); return aplicarSeleccion(inst.pares.flat()); }
     }
     const m = an.monomeros[an.monomero[i]];
     const nombre = NOMBRE_ELEMENTO[atom.elem] || atom.elem;
     ficha(`${nombre}${atom._num ? ' · ' + atom._num : ''}${atom._calfa ? ' · carbono α' : ''}`, COLORES_ELEMENTO[atom.elem] || '#999', `
       ${me.macro ? `<p>Residuo: <b>${Analisis.NOMBRES_RESIDUO[atom.resn] || atom.resn} ${atom.resi}</b> (cadena ${atom.chain}); átomo <b>${atom.atom}</b>.</p>` : `<p>Forma parte de: <b>${m.etiqueta}</b>.</p>`}
       <p>Enlazado a: ${atom.bonds.map(j => estado.atomos[j]).map(b => b._num || (me.macro ? b.atom : b.elem)).join(', ') || 'ningún átomo'}.</p>`);
+    aplicarSeleccion([i, ...extras]);
   }
   window.mostrarDetalleExterno = d => ficha(d.titulo, '#2f6fdd', `<p>${d.texto}</p>`);
 
@@ -1082,6 +1198,7 @@
     $('#btnEtqRes').onclick = () => { estado.etqRes = estado.pref.etqRes = !estado.etqRes; pintarBarra(); pintar(); };
     $('#btnDescomponer').onclick = descomponer;
     $('#btnGuia').onclick = () => { estado.guia = !estado.guia; pintarBarra(); pintar(); };
+    $$('#interruptor2d [data-v2]').forEach(b => b.onclick = () => { estado.vista2d = estado.pref.vista2d = b.dataset.v2; pintar(); });
     $('#btnCiclar').onclick = () => { if (estado.cicl) { verEn3D(); animarCiclacion(estado.cicl.n); } };
     $('#btnAbrirCadena').onclick = () => { if (estado.cicl) { verEn3D(); animarCiclacion(0); } };
     $('#rangoCicl').oninput = e => { if (estado.cicl) { clearInterval(estado.cicl.anim); irFotograma(+e.target.value, false); } };

@@ -274,3 +274,32 @@ button, input, select { font: inherit; color: inherit; }
 .barra-cicl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); padding: 8px 12px; }
 .barra-cicl input[type=range] { flex: 1; min-width: 140px; accent-color: var(--acento); }
 .barra-cicl .paso { flex-basis: 100%; font-size: 14px; }
+
+/* ---------- Interruptor Real / Estudio (vista 2D) ---------- */
+.interruptor2d { display: inline-flex; border: 1px solid var(--borde); border-radius: 999px; overflow: hidden; margin: 8px 10px 0; align-self: flex-start; }
+.interruptor2d button { border: 0; background: var(--superficie); padding: 4px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--texto-suave); }
+.interruptor2d button.activo { background: var(--acento); color: #fff; }
+.interruptor2d button:disabled { opacity: .45; cursor: not-allowed; }
+.v2d-sel text { fill: #e67700 !important; font-weight: 900 !important; }
+.v2d-sel > rect:first-child { stroke: #f59f00; stroke-width: 2.5; }
+
+/* ---------- Forma de estudio: fondo blanco, trazo negro ---------- */
+.cont-estudio { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; background: #fff; color: #111; margin-top: 6px; }
+.est-barra { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 56px 4px 10px; font-size: 12.5px; color: #495057; }
+.est-barra .chip { background: #fff; color: #212529; border-color: #ced4da; }
+.est-barra .chip.activo { background: #212529; border-color: #212529; color: #fff; }
+.est-lienzo { flex: 1; min-height: 0; touch-action: none; cursor: grab; background: #fff; }
+.est-svg { width: 100%; height: 100%; display: block; user-select: none; }
+.est-zoom { top: 6px; }
+.est-zoom .btn-icono { background: #f1f3f5; color: #212529; border-color: #ced4da; }
+.est-svg text { font: 600 17px "Helvetica Neue", Arial, system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+.est-enlace line { stroke: #111; stroke-width: 2; stroke-linecap: round; }
+.est-enlace line.est-diana, .est-hb line.est-diana { stroke: transparent; stroke-width: 14; }
+.est-enlace, .est-hb, .est-atomo, .est-tag { cursor: pointer; }
+.est-enlace:hover line:not(.est-diana) { stroke: #1c4fd6; }
+.est-caja { fill: none; stroke-width: 2; stroke-dasharray: 6 3; }
+.est-tag text { font: 700 12px system-ui, sans-serif !important; }
+.est-nota { font: italic 500 14px system-ui, sans-serif !important; fill: #495057; }
+.est-aviso { padding: 16px; color: #c92a2a; font-size: 14px; }
+
+.oculto-medible { visibility: hidden; position: absolute !important; inset: 0; pointer-events: none; }
