@@ -9,7 +9,7 @@
 const VistaEstudio = (() => {
   const ESC = 44;
   const SUB = n => String(n).replace(/\d/g, d => '₀₁₂₃₄₅₆₇₈₉'[d]);
-  const COLOR_EL = { O: '#c92a2a', N: '#1c4fd6', P: '#d9480f', S: '#a37200' };
+  const COLOR_EL = { O: 'var(--est-O)', N: 'var(--est-N)', P: 'var(--est-P)', S: 'var(--est-S)' };
 
   /* =============== CORRESPONDENCIA DIBUJO ↔ 3D =============== */
   function emparejar(dib, A, an) {
@@ -223,7 +223,7 @@ const VistaEstudio = (() => {
       const pa = pos(h), pb = pos(acc), a1 = recortar(pa, pb, etq[h]), b1 = recortar(pb, pa, etq[acc]);
       const sel = res && p.sel.has(res.map[h]) && p.sel.has(res.map[acc]);
       capas.hb.push(`<g class="est-hb" data-h="${k}"><line class="est-diana" x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}"/>` +
-        `<line x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}" stroke="${sel ? '#e67700' : hbActivo ? '#0c8599' : '#222'}" stroke-width="2.2" stroke-dasharray="5 4"/></g>`);
+        `<line x1="${a1.x}" y1="${a1.y}" x2="${b1.x}" y2="${b1.y}" stroke="${sel ? '#f59f00' : hbActivo ? '#22b8cf' : 'var(--est-trazo)'}" stroke-width="2.2" stroke-dasharray="5 4"/></g>`);
     });
     // átomos
     dib.at.forEach((s, u) => {
@@ -233,8 +233,8 @@ const VistaEstudio = (() => {
       const sel = ats.some(i => p.sel.has(i));
       const fondo = sel ? `<rect x="${q.x - e.w - 3}" y="${q.y - e.h - 4}" width="${2 * e.w + 6}" height="${2 * e.h + 8}" rx="8" fill="#ffe066" stroke="#f59f00" stroke-width="2"/>`
         : col ? `<rect x="${q.x - e.w - 2}" y="${q.y - e.h - 3}" width="${2 * e.w + 4}" height="${2 * e.h + 6}" rx="7" fill="${col.color}" opacity=".3"/>` : '';
-      const color = s.el === '*' ? '#868e96' : (col && !sel ? col.color : COLOR_EL[s.el] || '#111');
-      capas.at.push(`<g class="est-atomo" data-n="${u}">${fondo}<rect x="${q.x - e.w}" y="${q.y - e.h}" width="${2 * e.w}" height="${2 * e.h}" fill="#fff"/>` +
+      const color = sel ? '#1d232b' : s.el === '*' ? 'var(--texto-suave)' : (col ? col.color : COLOR_EL[s.el] || 'var(--est-trazo)');
+      capas.at.push(`<g class="est-atomo" data-n="${u}">${fondo}<rect x="${q.x - e.w}" y="${q.y - e.h}" width="${2 * e.w}" height="${2 * e.h}" fill="${sel ? '#ffe066' : 'var(--visor)'}"/>` +
         `<text x="${q.x}" y="${q.y}" fill="${color}">${e.t}</text></g>`);
     });
     // cajas (éster y peptídico) y etiquetas con el nombre de los enlaces característicos
@@ -249,7 +249,7 @@ const VistaEstudio = (() => {
           const ats = inst.pares.flat();
           if (!ats.every(i => nodoDe.has(i))) return;
           const nodos = [...new Set(ats.map(i => nodoDe.get(i)))];
-          const color = (CATALOGO[k] || {}).color || '#333';
+          const color = (CATALOGO[k] || {}).color || 'var(--est-trazo)';
           const titulo = (inst.titulo || CATALOGO[k].nombre).replace(/^Enlace /, 'enlace ');
           if (CAJA.includes(k)) {
             // la caja rodea –CO–O– (éster) o –CO–NH– (peptídico): el C del carbonilo con su =O
@@ -269,7 +269,7 @@ const VistaEstudio = (() => {
             // etiqueta pegada encima de su caja
             const texto = p.practica ? '?' : titulo, w = ancho(texto) * 0.68 + 14, cx = (x0 + x1) / 2, ty = y0 - 15;
             etiquetas.push({ tipo: 'enlace', k, inst });
-            capas.tags.push(`<g class="est-tag" data-t="${etiquetas.length - 1}"><rect x="${cx - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="#fff" stroke="${color}" stroke-width="1.6"/>` +
+            capas.tags.push(`<g class="est-tag" data-t="${etiquetas.length - 1}"><rect x="${cx - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="var(--visor)" stroke="${color}" stroke-width="1.6"/>` +
               `<text x="${cx}" y="${ty + 0.5}" fill="${color}">${texto}</text></g>`);
           } else {
             const q = nodos.map(pos), cx = q.reduce((t, v) => t + v.x, 0) / q.length, cy = q.reduce((t, v) => t + v.y, 0) / q.length;
@@ -301,7 +301,7 @@ const VistaEstudio = (() => {
         etiquetas.push(t.info);
         capas.tags.push(`<g class="est-tag" data-t="${etiquetas.length - 1}">` +
           `<line x1="${t.x}" y1="${t.y}" x2="${t.x}" y2="${ty + (lugar === 'abajo' ? -11 : 11)}" stroke="${t.color}" stroke-width="1.2" stroke-dasharray="3 3" opacity=".8"/>` +
-          `<rect x="${t.x - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="#fff" stroke="${t.color}" stroke-width="1.6"/>` +
+          `<rect x="${t.x - w / 2}" y="${ty - 11}" width="${w}" height="22" rx="11" fill="var(--visor)" stroke="${t.color}" stroke-width="1.6"/>` +
           `<text x="${t.x}" y="${ty + 0.5}" fill="${t.color}">${texto}</text></g>`);
       });
     });
